@@ -1,163 +1,183 @@
-# 👾 SSH Connection Manager (conn)
+# conn — SSH Connection Manager
 
-A bash script to easily manage SSH connections with custom aliases.
+**A lightweight, zero-dependency Bash tool to manage SSH connections with aliases.**
 
-## 🪄 Installation
+Stop memorizing hosts, usernames and ports.  
+Store every server under a short alias and connect with a single command.
 
-### Method 1: Global Installation (Recommended)
+---
 
-Clone the repository from GitHub:
+## Overview
+
+`conn` is a single-file Bash script that wraps `ssh` with a human-friendly interface. It stores your server definitions in `~/.ssh_connections.conf` and exposes a clean CLI to add, list, edit, connect to, and remove them — plus SSH key management and auto-update built in.
+
+```bash
+conn to production        # SSH into "production" in one shot
+conn list                 # Pretty-printed table of all servers
+conn add                  # Interactive wizard to add a new server
+conn update               # Pull the latest version from GitHub
+```
+
+---
+
+## Installation
+
+### Global install (recommended)
 
 ```bash
 git clone https://github.com/andreapollastri/ssh-connection-manager.git
 cd ssh-connection-manager
+chmod +x install.sh && ./install.sh
 ```
 
-Run the installation script:
+The installer copies `conn` to `/usr/local/bin` so the command is available system-wide from any directory.
 
-```bash
-chmod +x install.sh
-./install.sh
-```
-
-After installation, you can use the `conn` command from any directory!
-
-### Method 2: Direct Usage
-
-If you prefer not to install globally:
+### Local usage (no install)
 
 ```bash
 chmod +x conn
 ./conn <command>
 ```
 
-## ⌨️ Available Commands
+---
 
-### 1. Add a New Connection
+## Commands
+
+| Command               | Description                                     |
+| --------------------- | ----------------------------------------------- |
+| `conn add`            | Interactive wizard to save a new connection     |
+| `conn list`           | Print all connections in a formatted table      |
+| `conn info <alias>`   | Show full details for a single connection       |
+| `conn to <alias>`     | Open an SSH session by alias                    |
+| `conn edit <alias>`   | Modify an existing connection                   |
+| `conn remove <alias>` | Delete a connection (with confirmation)         |
+| `conn reset <alias>`  | Remove stale host keys (`ssh-keygen -R`)        |
+| `conn key <action>`   | Manage SSH keys — `public`, `private`, `create` |
+| `conn update`         | Self-update from GitHub                         |
+| `conn help`           | Print usage reference                           |
+
+---
+
+## Usage
+
+### Adding a connection
 
 ```bash
 conn add
 ```
 
-You will be prompted to enter:
-
-- **Alias**: short name to identify the server
-- **User**: SSH username (default: root)
-- **Host**: IP address or hostname of the server
-- **Port**: SSH port (default: 22)
-
-**Example:**
-
 ```
-Type alias: myserver
-Type user (default: root): andrea
-Type host: 192.168.1.100
-Type port (default: 22): 2222
+Type alias: production
+Type user (default: root): deploy
+Type host: prod.example.com
+Type port (default: 22): 22
+Password (optional — copied to clipboard on connect):
 ```
 
-### 2. List All Servers
+### Listing servers
 
 ```bash
 conn list
 ```
 
-Example output:
-
 ```
-=== SSH Servers List ===
+╔════════════════════════════════════════════════════════════════════════════╗
+║                          SSH SERVERS LIST                                  ║
+╚════════════════════════════════════════════════════════════════════════════╝
 
-myserver - andrea@192.168.1.100:2222
-production - root@prod.example.com:22
-staging - deploy@staging.example.com:2222
+  ALIAS                 USER                       HOST                  PORT
+  ────────────────────────────────────────────────────────────────────────────
+  production            root                       prod.example.com      22   🔑
+  staging               deploy                     staging.example.com   2222
+  myserver              andrea                     192.168.1.100         22
+
+  ────────────────────────────────────────────────────────────────────────────
+  💡  Use conn to <alias> to connect
 ```
 
-### 3. Connect to a Server
+> 🔑 indicates a saved password that will be automatically copied to the clipboard on connect.
+
+### Connecting
 
 ```bash
-conn to <alias>
+conn to production
 ```
 
-**Example:**
+Before opening the SSH session, `conn` will:
+
+1. Verify that an SSH key pair exists (warns if missing)
+2. Check for available script updates
+3. Copy the saved password to the clipboard (if one is stored)
+4. Hand off to `ssh`
+
+### Managing SSH keys
 
 ```bash
-conn to myserver
+conn key public    # Print your public key
+conn key create    # Generate a new id_rsa key pair
+conn key private   # Print your private key (handle with care)
 ```
 
-### 4. Remove a Connection
+### Resetting a host key
 
-```bash
-conn remove <alias>
-```
-
-You will be asked for confirmation before proceeding.
-
-**Example:**
-
-```bash
-conn remove myserver
-```
-
-### 5. Reset SSH Keys
-
-```bash
-conn reset <alias>
-```
-
-Executes `ssh-keygen -R` to remove the host's SSH keys (useful in case of "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED").
-
-**Example:**
+Useful when you get a _"WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED"_ error:
 
 ```bash
 conn reset myserver
 ```
 
-### 6. Help
+---
 
-```bash
-conn help
-```
+## Configuration
 
-## 🗄️ Configuration File
-
-Connections are saved in:
+Connections are persisted in a plain-text file:
 
 ```
 ~/.ssh_connections.conf
 ```
 
-The file uses the format: `alias|user|host|port`
+Each line follows the format `alias|user|host|port|password`. You can back it up, version-control it, or copy it between machines freely.
 
-## 🚀 Features
+> **Security note:** Passwords are stored in plain text. Where possible, prefer SSH key-based authentication and leave the password field empty.
 
-- ✅ Colorful and user-friendly interface
-- ✅ Default values for user (root) and port (22)
-- ✅ Input validation
-- ✅ Confirmation before deleting connections
-- ✅ Automatic SSH key management
-- ✅ No external dependencies (bash only)
+---
 
-## 🔧 Requirements
+## Requirements
 
-- macOS (or any Unix-like system)
-- Bash
-- SSH client installed
-- SSH key pair (`id_rsa`) properly configured and installed on remote servers
+- macOS or any Unix-like system
+- Bash 4.0+
+- OpenSSH client
+- Git (required for `conn update`)
+- Clipboard support — `pbcopy` on macOS (built-in), `xclip` or `xsel` on Linux
 
-## 📝 Notes
+---
 
-- Connections are saved in a simple text file
-- Each user has their own configuration file
-- The script does not save passwords (uses standard SSH authentication)
+## Uninstallation
 
-## 🗑️ Uninstallation
-
-If you installed globally:
+Remove the binary:
 
 ```bash
 sudo rm /usr/local/bin/conn
+```
+
+Remove saved connections:
+
+```bash
 rm ~/.ssh_connections.conf
 ```
 
-## 📄 License
+---
 
-Free to use and modify.
+## Contributing
+
+Pull requests are welcome. For significant changes, please open an issue first to discuss what you'd like to change.
+
+---
+
+## License
+
+[MIT](LICENSE) — free to use, modify and distribute.
+
+---
+
+Made with care by [Andrea Pollastri](https://web.ap.it)

@@ -27,31 +27,120 @@ show_help() {
     echo "Available commands:"
     echo "  to <alias>         - Connect to the server with the specified alias"
     echo "  list               - Show the list of all configured servers"
+    echo "  info <alias>       - Show detailed information about a connection"
     echo "  add                - Add a new connection"
+    echo "  edit <alias>       - Edit an existing connection"
     echo "  remove <alias>     - Remove an existing connection"
     echo "  reset <alias>      - Remove SSH host key for the specified alias"
+    echo "  key <action>       - Manage SSH keys (public|private|create)"
+    echo "  update             - Update the script to the latest version from GitHub"
     echo "  help               - Show this help message"
+    echo ""
+    echo -e "${YELLOW}Tip:${NC} You can backup or manually edit connections at:"
+    echo "  ~/.ssh_connections.conf"
+    echo ""
+    echo -e "${YELLOW}Note:${NC} Saved passwords are copied to clipboard during connection (🔑)"
     echo ""
 }
 
 # Function to list all connections
 list_connections() {
     init_config
-    
+
     if [ ! -s "$CONFIG_FILE" ]; then
         echo -e "${YELLOW}No connections configured.${NC}"
         echo -e "${YELLOW}Use 'conn add' to add a new connection.${NC}"
         return
     fi
-    
-    echo -e "${BLUE}=== SSH Servers List ===${NC}"
+
     echo ""
-    
-    while IFS='|' read -r alias user host port; do
+    echo -e "${BLUE}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║                          SSH SERVERS LIST                                  ║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+
+    # Print header
+    printf "  ${BLUE}%-20s${NC}  ${BLUE}%-25s${NC}  ${BLUE}%-20s${NC}  ${BLUE}%-6s${NC}\n" "ALIAS" "USER" "HOST" "PORT"
+    echo -e "  ${BLUE}────────────────────────────────────────────────────────────────────────────${NC}"
+
+    # Print connections
+    sort "$CONFIG_FILE" | while IFS='|' read -r alias user host port password; do
         if [ -n "$alias" ]; then
-            echo -e "${GREEN}$alias${NC} - ${user}@${host}:${port}"
+            # Truncate long values for better display
+            display_alias="$alias"
+            display_user="$user"
+            display_host="$host"
+
+            if [ ${#display_alias} -gt 20 ]; then
+                display_alias="${display_alias:0:17}..."
+            fi
+            if [ ${#display_user} -gt 25 ]; then
+                display_user="${display_user:0:22}..."
+            fi
+            if [ ${#display_host} -gt 20 ]; then
+                display_host="${display_host:0:17}..."
+            fi
+
+            # Add lock icon if password exists
+            local pwd_icon=""
+            if [ -n "$password" ]; then
+                pwd_icon=" ${YELLOW}🔑${NC}"
+            fi
+
+            printf "  ${GREEN}%-20s${NC}  %-25s  %-20s  ${YELLOW}%-6s${NC}${pwd_icon}\n" "$display_alias" "$display_user" "$display_host" "$port"
         fi
-    done < "$CONFIG_FILE"
+    done
+
+    echo ""
+    echo -e "${BLUE}────────────────────────────────────────────────────────────────────────────${NC}"
+    echo -e "  ${YELLOW}💡 Tip:${NC} Use ${GREEN}conn to <alias>${NC} to connect"
+    echo ""
+}
+
+# Function to show connection info
+show_connection_info() {
+    init_config
+
+    if [ -z "$1" ]; then
+        echo -e "${RED}Error: please specify an alias!${NC}"
+        echo "Usage: conn info <alias>"
+        return 1
+    fi
+
+    alias="$1"
+
+    # Search for the connection
+    connection=$(grep "^$alias|" "$CONFIG_FILE" 2>/dev/null)
+
+    if [ -z "$connection" ]; then
+        echo -e "${RED}Error: alias '$alias' does not exist!${NC}"
+        echo -e "${YELLOW}Use 'conn list' to see available connections.${NC}"
+        return 1
+    fi
+
+    # Extract details
+    IFS='|' read -r al user host port password <<< "$connection"
+
+    echo ""
+    echo -e "${BLUE}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║                          CONNECTION INFO                                   ║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${GREEN}Alias:${NC}      $al"
+    echo -e "${GREEN}User:${NC}       $user"
+    echo -e "${GREEN}Host:${NC}       $host"
+    echo -e "${GREEN}Port:${NC}       $port"
+    echo -e "${GREEN}Connection:${NC} $user@$host:$port"
+
+    if [ -n "$password" ]; then
+        echo -e "${GREEN}Password:${NC}   ${RED}$password${NC} ${YELLOW}(⚠️ visible in plain text)${NC}"
+    else
+        echo -e "${GREEN}Password:${NC}   ${YELLOW}Not saved${NC}"
+    fi
+
+    echo ""
+    echo -e "${BLUE}────────────────────────────────────────────────────────────────────────────${NC}"
+    echo -e "  ${YELLOW}💡 Tip:${NC} Use ${GREEN}conn to $alias${NC} to connect"
     echo ""
 }
 
@@ -90,12 +179,108 @@ add_connection() {
     read -p "Type port (default: 22): " port
     port=${port:-22}
     
+    # Request password (optional)
+    echo ""
+    echo -e "${YELLOW}Password (optional - will be copied to clipboard during connection):${NC}"
+    read -s -p "Type password (optional): " password
+    echo ""
+    
     # Save the connection
-    echo "$alias|$user|$host|$port" >> "$CONFIG_FILE"
+    echo "$alias|$user|$host|$port|$password" >> "$CONFIG_FILE"
     
     echo ""
     echo -e "${GREEN}✓ Connection '$alias' added successfully!${NC}"
     echo -e "  ${user}@${host}:${port}"
+    if [ -n "$password" ]; then
+        echo -e "  ${YELLOW}(password will be copied to clipboard on connect)${NC}"
+    fi
+    echo ""
+}
+
+# Function to edit an existing connection
+edit_connection() {
+    init_config
+    
+    if [ -z "$1" ]; then
+        echo -e "${RED}Error: please specify an alias!${NC}"
+        echo "Usage: conn edit <alias>"
+        return 1
+    fi
+    
+    old_alias="$1"
+    
+    # Check if alias exists
+    if ! grep -q "^$old_alias|" "$CONFIG_FILE" 2>/dev/null; then
+        echo -e "${RED}Error: alias '$old_alias' does not exist!${NC}"
+        return 1
+    fi
+    
+    # Get current connection details
+    connection=$(grep "^$old_alias|" "$CONFIG_FILE")
+    IFS='|' read -r current_alias current_user current_host current_port current_password <<< "$connection"
+    
+    echo -e "${BLUE}=== Edit SSH Connection ===${NC}"
+    echo ""
+    echo -e "${YELLOW}Press Enter to keep the current value${NC}"
+    echo ""
+    
+    # Request new alias
+    read -p "Alias ($current_alias): " new_alias
+    new_alias=${new_alias:-$current_alias}
+    
+    # Check if new alias already exists (and it's different from the current one)
+    if [ "$new_alias" != "$current_alias" ] && grep -q "^$new_alias|" "$CONFIG_FILE" 2>/dev/null; then
+        echo -e "${RED}Error: alias '$new_alias' already exists!${NC}"
+        return 1
+    fi
+    
+    # Request new user
+    read -p "User ($current_user): " new_user
+    new_user=${new_user:-$current_user}
+    
+    # Request new host
+    read -p "Host ($current_host): " new_host
+    new_host=${new_host:-$current_host}
+    
+    # Request new port
+    read -p "Port ($current_port): " new_port
+    new_port=${new_port:-$current_port}
+    
+    # Request new password
+    echo ""
+    if [ -n "$current_password" ]; then
+        echo -e "${YELLOW}Password (current: ******, press Enter to keep, type 'REMOVE' to delete):${NC}"
+    else
+        echo -e "${YELLOW}Password (optional - will be copied to clipboard during connection):${NC}"
+    fi
+    read -s -p "Type password: " new_password
+    echo ""
+    
+    # Handle password
+    if [ -z "$new_password" ]; then
+        # Keep current password
+        new_password="$current_password"
+    elif [ "$new_password" = "REMOVE" ]; then
+        # Remove password
+        new_password=""
+    fi
+    
+    # Remove old connection
+    sed -i.bak "/^$old_alias|/d" "$CONFIG_FILE"
+    rm -f "${CONFIG_FILE}.bak"
+    
+    # Add updated connection
+    echo "$new_alias|$new_user|$new_host|$new_port|$new_password" >> "$CONFIG_FILE"
+    
+    echo ""
+    echo -e "${GREEN}✓ Connection updated successfully!${NC}"
+    if [ "$new_alias" != "$current_alias" ]; then
+        echo -e "  ${YELLOW}Alias changed: $current_alias → $new_alias${NC}"
+    fi
+    echo -e "  ${new_user}@${new_host}:${new_port}"
+    if [ -n "$new_password" ]; then
+        echo -e "  ${YELLOW}(password will be copied to clipboard on connect)${NC}"
+    fi
     echo ""
 }
 
@@ -119,11 +304,14 @@ remove_connection() {
     
     # Show connection details
     connection=$(grep "^$alias|" "$CONFIG_FILE")
-    IFS='|' read -r al user host port <<< "$connection"
+    IFS='|' read -r al user host port password <<< "$connection"
     
     echo -e "${YELLOW}You are about to remove:${NC}"
     echo -e "  Alias: ${GREEN}$al${NC}"
     echo -e "  Connection: ${user}@${host}:${port}"
+    if [ -n "$password" ]; then
+        echo -e "  ${YELLOW}(with saved password 🔑)${NC}"
+    fi
     echo ""
     
     # Ask for confirmation
@@ -151,6 +339,25 @@ connect_to() {
     
     alias="$1"
     
+    # Check if SSH key exists
+    SSH_KEY_PATH="$HOME/.ssh/id_rsa"
+    if [ ! -f "$SSH_KEY_PATH" ]; then
+        echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "${YELLOW}⚠  SSH key not found!${NC}"
+        echo -e "${YELLOW}   Run 'conn key create' to generate a new key pair.${NC}"
+        echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo ""
+        read -p "Do you want to continue anyway? (y/N): " confirm
+        if [[ ! "$confirm" =~ ^[yY]$ ]]; then
+            echo -e "${YELLOW}Connection cancelled.${NC}"
+            return 0
+        fi
+        echo ""
+    fi
+    
+    # Check for updates
+    check_for_updates
+    
     # Search for the connection
     connection=$(grep "^$alias|" "$CONFIG_FILE" 2>/dev/null)
     
@@ -161,10 +368,31 @@ connect_to() {
     fi
     
     # Extract details
-    IFS='|' read -r al user host port <<< "$connection"
+    IFS='|' read -r al user host port password <<< "$connection"
     
     echo -e "${GREEN}Connecting to $alias...${NC}"
     echo -e "  ${user}@${host}:${port}"
+    
+    # Copy password to clipboard if present
+    if [ -n "$password" ]; then
+        # Detect OS and copy to clipboard
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            # macOS
+            echo -n "$password" | pbcopy
+            echo -e "  ${GREEN}✓ Password copied to clipboard!${NC}"
+        elif command -v xclip &> /dev/null; then
+            # Linux with xclip
+            echo -n "$password" | xclip -selection clipboard
+            echo -e "  ${GREEN}✓ Password copied to clipboard!${NC}"
+        elif command -v xsel &> /dev/null; then
+            # Linux with xsel
+            echo -n "$password" | xsel --clipboard --input
+            echo -e "  ${GREEN}✓ Password copied to clipboard!${NC}"
+        else
+            echo -e "  ${YELLOW}⚠  Cannot copy to clipboard (install xclip or xsel)${NC}"
+        fi
+    fi
+    
     echo ""
     
     # Execute SSH connection
@@ -192,7 +420,7 @@ reset_host() {
     fi
     
     # Extract host
-    IFS='|' read -r al user host port <<< "$connection"
+    IFS='|' read -r al user host port password <<< "$connection"
     
     echo -e "${YELLOW}Resetting SSH keys for:${NC}"
     echo -e "  Host: ${host}"
@@ -208,6 +436,280 @@ reset_host() {
     
     echo ""
     echo -e "${GREEN}✓ SSH keys reset for '$alias'!${NC}"
+}
+
+# Function to manage SSH keys
+manage_keys() {
+    SSH_KEY_PATH="$HOME/.ssh/id_rsa"
+    SSH_PUB_KEY_PATH="$HOME/.ssh/id_rsa.pub"
+    
+    if [ -z "$1" ]; then
+        echo -e "${RED}Error: please specify an action!${NC}"
+        echo "Usage: conn key <public|private|create>"
+        return 1
+    fi
+    
+    action="$1"
+    
+    case "$action" in
+        public)
+            if [ ! -f "$SSH_PUB_KEY_PATH" ]; then
+                echo -e "${RED}Error: SSH public key not found!${NC}"
+                echo -e "${YELLOW}Run 'conn key create' to generate a new key pair.${NC}"
+                return 1
+            fi
+            
+            echo -e "${BLUE}=== SSH Public Key ===${NC}"
+            echo ""
+            cat "$SSH_PUB_KEY_PATH"
+            echo ""
+            echo -e "${YELLOW}Path:${NC} $SSH_PUB_KEY_PATH"
+            echo ""
+            ;;
+            
+        private)
+            if [ ! -f "$SSH_KEY_PATH" ]; then
+                echo -e "${RED}Error: SSH private key not found!${NC}"
+                echo -e "${YELLOW}Run 'conn key create' to generate a new key pair.${NC}"
+                return 1
+            fi
+            
+            echo -e "${BLUE}=== SSH Private Key ===${NC}"
+            echo ""
+            echo -e "${YELLOW}Warning: Keep this key secret!${NC}"
+            echo ""
+            cat "$SSH_KEY_PATH"
+            echo ""
+            echo -e "${YELLOW}Path:${NC} $SSH_KEY_PATH"
+            echo ""
+            ;;
+            
+        create)
+            if [ -f "$SSH_KEY_PATH" ]; then
+                echo -e "${YELLOW}SSH key already exists at: $SSH_KEY_PATH${NC}"
+                echo ""
+                read -p "Do you want to overwrite it? (y/N): " confirm
+                
+                if [[ ! "$confirm" =~ ^[yY]$ ]]; then
+                    echo -e "${YELLOW}Operation cancelled.${NC}"
+                    echo ""
+                    echo -e "${BLUE}Showing existing public key:${NC}"
+                    echo ""
+                    cat "$SSH_PUB_KEY_PATH"
+                    echo ""
+                    return 0
+                fi
+            fi
+            
+            echo -e "${BLUE}=== Creating SSH Key Pair ===${NC}"
+            echo ""
+            
+            # Create .ssh directory if it doesn't exist
+            mkdir -p "$HOME/.ssh"
+            chmod 700 "$HOME/.ssh"
+            
+            # Generate SSH key
+            ssh-keygen -t rsa -b 4096 -f "$SSH_KEY_PATH" -N ""
+            
+            if [ $? -eq 0 ]; then
+                echo ""
+                echo -e "${GREEN}✓ SSH key pair created successfully!${NC}"
+                echo ""
+                echo -e "${BLUE}Your public key:${NC}"
+                echo ""
+                cat "$SSH_PUB_KEY_PATH"
+                echo ""
+                echo -e "${YELLOW}Path:${NC} $SSH_KEY_PATH"
+                echo ""
+            else
+                echo -e "${RED}Error: failed to create SSH key pair!${NC}"
+                return 1
+            fi
+            ;;
+            
+        *)
+            echo -e "${RED}Error: unknown action '$action'${NC}"
+            echo "Usage: conn key <public|private|create>"
+            return 1
+            ;;
+    esac
+}
+
+# Function to check for updates
+check_for_updates() {
+    REPO_URL="https://raw.githubusercontent.com/andreapollastri/ssh-connection-manager/main/conn"
+    
+    # Create temporary file
+    TMP_FILE=$(mktemp)
+    
+    # Download the remote version silently
+    if command -v curl &> /dev/null; then
+        curl -fsSL "$REPO_URL" -o "$TMP_FILE" 2>/dev/null
+    elif command -v wget &> /dev/null; then
+        wget -q "$REPO_URL" -O "$TMP_FILE" 2>/dev/null
+    else
+        rm -f "$TMP_FILE"
+        return 0
+    fi
+    
+    # Check if download was successful
+    if [ $? -ne 0 ] || [ ! -s "$TMP_FILE" ]; then
+        rm -f "$TMP_FILE"
+        return 0
+    fi
+    
+    # Find the script path - use a more reliable method
+    if command -v realpath &> /dev/null; then
+        SCRIPT_PATH="$(realpath "$0" 2>/dev/null)"
+    elif command -v readlink &> /dev/null && readlink -f "$0" &> /dev/null 2>&1; then
+        SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null)"
+    elif command -v greadlink &> /dev/null; then
+        SCRIPT_PATH="$(greadlink -f "$0" 2>/dev/null)"
+    else
+        # Fallback - simpler method that doesn't cd
+        if [ -L "$0" ]; then
+            # It's a symlink, try to resolve it
+            SCRIPT_PATH="$(ls -l "$0" 2>/dev/null | awk '{print $NF}')"
+        else
+            SCRIPT_PATH="$0"
+        fi
+    fi
+    
+    # If we couldn't get a path, skip the check
+    if [ -z "$SCRIPT_PATH" ] || [ ! -f "$SCRIPT_PATH" ]; then
+        rm -f "$TMP_FILE"
+        return 0
+    fi
+    
+    # Compare files
+    if ! cmp -s "$SCRIPT_PATH" "$TMP_FILE" 2>/dev/null; then
+        echo ""
+        echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "${YELLOW}⚠  A new version of the script is available!${NC}"
+        echo -e "${YELLOW}   Run 'conn update' to update to the latest version.${NC}"
+        echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo ""
+    fi
+    
+    rm -f "$TMP_FILE"
+}
+
+# Function to update the script
+update_script() {
+    echo -e "${BLUE}=== Update SSH Connection Manager ===${NC}"
+    echo ""
+    
+    # GitHub repository URL
+    REPO_URL="https://raw.githubusercontent.com/andreapollastri/ssh-connection-manager/main/conn"
+    
+    # Find the script path - use a more reliable method
+    if command -v realpath &> /dev/null; then
+        SCRIPT_PATH="$(realpath "$0")"
+    elif command -v readlink &> /dev/null && readlink -f "$0" &> /dev/null; then
+        SCRIPT_PATH="$(readlink -f "$0")"
+    elif command -v greadlink &> /dev/null; then
+        SCRIPT_PATH="$(greadlink -f "$0")"
+    else
+        # Fallback for macOS
+        SCRIPT_PATH="$( cd "$( dirname "$0" )" && pwd )/$(basename "$0")"
+        # If it's a symlink, resolve it
+        if [ -L "$0" ]; then
+            SCRIPT_PATH="$(ls -l "$0" | awk '{print $NF}')"
+            if [[ "$SCRIPT_PATH" != /* ]]; then
+                SCRIPT_PATH="$( cd "$( dirname "$0" )" && pwd )/$SCRIPT_PATH"
+            fi
+        fi
+    fi
+    
+    echo -e "Current script: ${YELLOW}$SCRIPT_PATH${NC}"
+    echo ""
+    
+    # Check if we need sudo
+    NEED_SUDO=false
+    SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
+    
+    if [ ! -w "$SCRIPT_PATH" ] || [ ! -w "$SCRIPT_DIR" ]; then
+        NEED_SUDO=true
+        echo -e "${YELLOW}Note: This script is in a system directory and requires sudo.${NC}"
+        echo ""
+    fi
+    
+    # Create temporary file
+    TMP_FILE=$(mktemp)
+    
+    echo "Downloading latest version from GitHub..."
+    
+    # Download the new version
+    if command -v curl &> /dev/null; then
+        curl -fsSL "$REPO_URL" -o "$TMP_FILE"
+    elif command -v wget &> /dev/null; then
+        wget -q "$REPO_URL" -O "$TMP_FILE"
+    else
+        echo -e "${RED}Error: neither curl nor wget is available!${NC}"
+        rm -f "$TMP_FILE"
+        return 1
+    fi
+    
+    # Check if download was successful
+    if [ $? -ne 0 ] || [ ! -s "$TMP_FILE" ]; then
+        echo -e "${RED}Error: failed to download the update!${NC}"
+        rm -f "$TMP_FILE"
+        return 1
+    fi
+    
+    # Check if there are actually changes
+    if cmp -s "$SCRIPT_PATH" "$TMP_FILE"; then
+        echo ""
+        echo -e "${GREEN}✓ Already up to date!${NC}"
+        rm -f "$TMP_FILE"
+        return 0
+    fi
+    
+    echo -e "${GREEN}✓ New version downloaded${NC}"
+    echo ""
+    
+    # Perform update
+    if [ "$NEED_SUDO" = true ]; then
+        echo "Installing update (requires sudo)..."
+        
+        # Backup current version
+        if ! sudo cp "$SCRIPT_PATH" "${SCRIPT_PATH}.backup" 2>/dev/null; then
+            echo -e "${RED}Error: failed to create backup!${NC}"
+            rm -f "$TMP_FILE"
+            return 1
+        fi
+        
+        # Replace with new version
+        if ! sudo cp "$TMP_FILE" "$SCRIPT_PATH" 2>/dev/null; then
+            echo -e "${RED}Error: failed to update script!${NC}"
+            rm -f "$TMP_FILE"
+            return 1
+        fi
+        
+        # Set permissions
+        sudo chmod +x "$SCRIPT_PATH"
+    else
+        # No sudo needed
+        # Backup current version
+        if ! cp "$SCRIPT_PATH" "${SCRIPT_PATH}.backup" 2>/dev/null; then
+            echo -e "${YELLOW}Warning: could not create backup${NC}"
+        fi
+        
+        # Replace with new version
+        cp "$TMP_FILE" "$SCRIPT_PATH"
+        chmod +x "$SCRIPT_PATH"
+    fi
+    
+    # Cleanup
+    rm -f "$TMP_FILE"
+    
+    echo ""
+    echo -e "${GREEN}✓ Script updated successfully!${NC}"
+    if [ -f "${SCRIPT_PATH}.backup" ]; then
+        echo -e "${YELLOW}Note: A backup of the previous version was saved to:${NC}"
+        echo "  ${SCRIPT_PATH}.backup"
+    fi
+    echo ""
 }
 
 # Main script
@@ -227,14 +729,26 @@ main() {
         list)
             list_connections
             ;;
+        info)
+            show_connection_info "$@"
+            ;;
         add)
             add_connection
+            ;;
+        edit)
+            edit_connection "$@"
             ;;
         remove)
             remove_connection "$@"
             ;;
         reset)
             reset_host "$@"
+            ;;
+        key)
+            manage_keys "$@"
+            ;;
+        update)
+            update_script
             ;;
         help|--help|-h)
             show_help
