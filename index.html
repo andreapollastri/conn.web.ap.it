@@ -517,10 +517,26 @@
     const cmd = document.getElementById('install-cmd');
     const terminal = cmd.closest('.terminal');
     terminal.style.cursor = 'pointer';
-    terminal.addEventListener('click', () => {
-      navigator.clipboard.writeText(cmd.textContent);
+    terminal.addEventListener('click', async () => {
+      const text = cmd.textContent;
       const hint = terminal.querySelector('.copy-hint');
-      hint.textContent = 'Copied!';
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(text);
+        } else {
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+        }
+        hint.textContent = 'Copied!';
+      } catch (e) {
+        hint.textContent = 'Select and copy manually';
+      }
       setTimeout(() => { hint.textContent = 'Click to copy'; }, 2000);
     });
   </script>
