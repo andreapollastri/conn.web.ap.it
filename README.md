@@ -25,8 +25,8 @@ conn update               # Pull the latest version from GitHub
 ### Global install (recommended)
 
 ```bash
-git clone https://github.com/andreapollastri/ssh-connection-manager.git
-cd ssh-connection-manager
+git clone https://github.com/andreapollastri/conn.git
+cd conn
 chmod +x install.sh && ./install.sh
 ```
 
