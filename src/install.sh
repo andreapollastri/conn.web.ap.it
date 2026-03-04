@@ -12,19 +12,23 @@ NC='\033[0m'
 echo -e "${BLUE}=== Installing SSH Connection Manager ===${NC}"
 echo ""
 
+# Resolve script directory (works when run from repo root as ./src/install.sh)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONN_PATH="$SCRIPT_DIR/conn"
+
 # Check if conn script exists
-if [ ! -f "conn" ]; then
-    echo -e "${RED}Error: 'conn' file not found in current directory!${NC}"
+if [ ! -f "$CONN_PATH" ]; then
+    echo -e "${RED}Error: 'conn' not found at $CONN_PATH${NC}"
     exit 1
 fi
 
 # Make the script executable
 echo -e "${YELLOW}Making script executable...${NC}"
-chmod +x conn
+chmod +x "$CONN_PATH"
 
 # Copy the script to /usr/local/bin
 echo -e "${YELLOW}Copying script to /usr/local/bin/ ...${NC}"
-if sudo cp conn /usr/local/bin/conn; then
+if sudo cp "$CONN_PATH" /usr/local/bin/conn; then
     echo -e "${GREEN}✓ Script copied successfully!${NC}"
 else
     echo -e "${RED}Error copying the script.${NC}"

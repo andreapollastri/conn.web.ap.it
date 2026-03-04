@@ -18,9 +18,9 @@ trap "rm -rf $TMP_DIR" EXIT
 
 echo -e "${YELLOW}Downloading conn...${NC}"
 if command -v curl &> /dev/null; then
-    curl -fsSL "$REPO_URL/conn" -o "$TMP_DIR/conn"
+    curl -fsSL "$REPO_URL/src/conn" -o "$TMP_DIR/conn"
 elif command -v wget &> /dev/null; then
-    wget -q "$REPO_URL/conn" -O "$TMP_DIR/conn"
+    wget -q "$REPO_URL/src/conn" -O "$TMP_DIR/conn"
 else
     echo -e "${RED}Error: curl or wget is required.${NC}"
     exit 1

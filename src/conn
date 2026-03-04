@@ -537,7 +537,7 @@ manage_keys() {
 
 # Function to check for updates
 check_for_updates() {
-    REPO_URL="https://raw.githubusercontent.com/andreapollastri/conn.web.ap.it/main/conn"
+    REPO_URL="https://raw.githubusercontent.com/andreapollastri/conn.web.ap.it/main/src/conn"
     
     # Create temporary file
     TMP_FILE=$(mktemp)
@@ -600,7 +600,7 @@ update_script() {
     echo ""
     
     # GitHub repository URL
-    REPO_URL="https://raw.githubusercontent.com/andreapollastri/conn.web.ap.it/main/conn"
+    REPO_URL="https://raw.githubusercontent.com/andreapollastri/conn.web.ap.it/main/src/conn"
     
     # Find the script path - use a more reliable method
     if command -v realpath &> /dev/null; then

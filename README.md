@@ -28,14 +28,14 @@ conn update               # Pull the latest version from GitHub
 curl -fsSL https://conn.web.ap.it/go.sh | bash
 ```
 
-Downloads and installs `conn` to `/usr/local/bin` — no clone required.
+Downloads and installs `conn` to `/usr/local/bin`
 
-### Global install (from repo)
+### Altenative install (from repo)
 
 ```bash
 git clone https://github.com/andreapollastri/conn.web.ap.it.git
 cd conn.web.ap.it
-chmod +x install.sh && ./install.sh
+chmod +x src/install.sh && ./src/install.sh
 ```
 
 The installer copies `conn` to `/usr/local/bin` so the command is available system-wide from any directory.
@@ -43,8 +43,8 @@ The installer copies `conn` to `/usr/local/bin` so the command is available syst
 ### Local usage (no install)
 
 ```bash
-chmod +x conn
-./conn <command>
+chmod +x src/conn
+./src/conn <command>
 ```
 
 ---
@@ -176,12 +176,16 @@ rm ~/.ssh_connections.conf
 
 ---
 
+## Take it to production
+
+Once you've connected to your servers with **conn**, deploy your Laravel apps with [cipi.sh](https://cipi.sh) — an open-source CLI built exclusively for Laravel. One command installs a complete production stack on any Ubuntu VPS: PHP-FPM, MariaDB, Nginx, Let's Encrypt SSL, zero-downtime deploys.
+
+---
+
 ## Links
 
 - **Website:** [conn.web.ap.it](https://conn.web.ap.it)
 - **Repository:** [github.com/andreapollastri/conn.web.ap.it](https://github.com/andreapollastri/conn.web.ap.it)
-
-The site lives in the `docs/` folder. Enable GitHub Pages (Settings → Pages → Source: Deploy from branch → Branch: main, folder: /docs) to publish it.
 
 ---
 
