@@ -98,6 +98,79 @@
       color: var(--text);
     }
 
+    .hamburger {
+      display: none;
+      flex-direction: column;
+      justify-content: center;
+      gap: 5px;
+      width: 2rem;
+      height: 2rem;
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 0;
+      flex-shrink: 0;
+    }
+
+    .hamburger span {
+      display: block;
+      width: 100%;
+      height: 2px;
+      background: var(--text-muted);
+      border-radius: 2px;
+      transition: transform 0.25s, opacity 0.25s;
+      transform-origin: center;
+    }
+
+    .hamburger.open span:nth-child(1) {
+      transform: translateY(7px) rotate(45deg);
+    }
+
+    .hamburger.open span:nth-child(2) {
+      opacity: 0;
+    }
+
+    .hamburger.open span:nth-child(3) {
+      transform: translateY(-7px) rotate(-45deg);
+    }
+
+    @media (max-width: 540px) {
+      header {
+        flex-wrap: nowrap;
+        position: relative;
+      }
+
+      .hamburger {
+        display: flex;
+      }
+
+      nav {
+        display: none;
+        flex-direction: column;
+        gap: 0;
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        background: var(--bg-elevated);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 0.5rem 0;
+        z-index: 100;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+      }
+
+      nav.open {
+        display: flex;
+      }
+
+      nav a {
+        padding: 0.75rem 1.25rem;
+        font-size: 0.95rem;
+        border-radius: 6px;
+      }
+    }
+
     /* Hero */
     .hero {
       padding: 4rem 0 5rem;
@@ -370,6 +443,10 @@
       section {
         padding: 3rem 0;
       }
+
+      .cipi-section {
+        padding: 1.75rem;
+      }
     }
   </style>
 </head>
@@ -385,7 +462,12 @@
       </svg>
       conn
     </span>
-    <nav>
+    <button class="hamburger" id="hamburger" aria-label="Toggle navigation" aria-expanded="false">
+      <span></span>
+      <span></span>
+      <span></span>
+    </button>
+    <nav id="main-nav">
       <a href="#features">Features</a>
       <a href="#how">How it works</a>
       <a href="https://github.com/andreapollastri/conn.web.ap.it" target="_blank" rel="noopener">↗ GitHub</a>
@@ -514,6 +596,23 @@
   </footer>
 
   <script>
+    const hamburger = document.getElementById('hamburger');
+    const mainNav = document.getElementById('main-nav');
+
+    hamburger.addEventListener('click', () => {
+      const isOpen = mainNav.classList.toggle('open');
+      hamburger.classList.toggle('open', isOpen);
+      hamburger.setAttribute('aria-expanded', isOpen);
+    });
+
+    mainNav.querySelectorAll('a').forEach(link => {
+      link.addEventListener('click', () => {
+        mainNav.classList.remove('open');
+        hamburger.classList.remove('open');
+        hamburger.setAttribute('aria-expanded', false);
+      });
+    });
+
     const cmd = document.getElementById('install-cmd');
     const terminal = cmd.closest('.terminal');
     terminal.style.cursor = 'pointer';
