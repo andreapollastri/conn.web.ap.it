@@ -22,11 +22,19 @@ conn update               # Pull the latest version from GitHub
 
 ## Installation
 
-### Global install (recommended)
+### Quick install (one-liner)
 
 ```bash
-git clone https://github.com/andreapollastri/conn.git
-cd conn
+curl -fsSL https://conn.web.ap.it/go.sh | bash
+```
+
+Downloads and installs `conn` to `/usr/local/bin` — no clone required.
+
+### Global install (from repo)
+
+```bash
+git clone https://github.com/andreapollastri/conn.web.ap.it.git
+cd conn.web.ap.it
 chmod +x install.sh && ./install.sh
 ```
 
@@ -165,6 +173,15 @@ Remove saved connections:
 ```bash
 rm ~/.ssh_connections.conf
 ```
+
+---
+
+## Links
+
+- **Website:** [conn.web.ap.it](https://conn.web.ap.it)
+- **Repository:** [github.com/andreapollastri/conn.web.ap.it](https://github.com/andreapollastri/conn.web.ap.it)
+
+The site lives in the `docs/` folder. Enable GitHub Pages (Settings → Pages → Source: Deploy from branch → Branch: main, folder: /docs) to publish it.
 
 ---
 

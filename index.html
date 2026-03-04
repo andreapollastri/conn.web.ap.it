@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>conn — SSH Connection Manager</title>
+  <meta name="description"
+    content="A lightweight Bash tool to manage SSH connections with aliases. Stop memorizing hosts — connect with one command.">
+  <link rel="icon" type="image/svg+xml" href="icon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0a0a0b;
+      --bg-elevated: #141416;
+      --text: #e4e4e7;
+      --text-muted: #a1a1aa;
+      --accent: #22c55e;
+      --accent-dim: #16a34a;
+      --border: #27272a;
+      --terminal-bg: #18181b;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: 'DM Sans', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a {
+      color: var(--accent);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+
+    a:hover {
+      color: #4ade80;
+    }
+
+    .container {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 0 1.5rem;
+    }
+
+    /* Header */
+    header {
+      padding: 1.5rem 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-weight: 700;
+      font-size: 1.125rem;
+      color: var(--text);
+    }
+
+    .logo svg {
+      width: 1.5rem;
+      height: 1.5rem;
+      flex-shrink: 0;
+    }
+
+    nav {
+      display: flex;
+      gap: 1.5rem;
+    }
+
+    nav a {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+
+    nav a:hover {
+      color: var(--text);
+    }
+
+    /* Hero */
+    .hero {
+      padding: 4rem 0 5rem;
+      text-align: center;
+    }
+
+    .badge {
+      display: inline-block;
+      font-size: 0.75rem;
+      font-weight: 500;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 1.5rem;
+    }
+
+    .hero h1 {
+      font-size: clamp(2.5rem, 6vw, 3.5rem);
+      font-weight: 700;
+      line-height: 1.15;
+      margin-bottom: 1rem;
+      letter-spacing: -0.02em;
+    }
+
+    .hero h1 em {
+      font-style: italic;
+      color: var(--text-muted);
+    }
+
+    .hero .tagline {
+      font-size: 1.25rem;
+      color: var(--text-muted);
+      max-width: 480px;
+      margin: 0 auto 2.5rem;
+    }
+
+    /* Terminal */
+    .terminal {
+      background: var(--terminal-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem 1.5rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.9rem;
+      text-align: left;
+      overflow-x: auto;
+    }
+
+    .terminal-header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+      color: var(--text-muted);
+      font-size: 0.8rem;
+    }
+
+    .terminal-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+
+    .terminal-dot:nth-child(1) {
+      background: #ef4444;
+    }
+
+    .terminal-dot:nth-child(2) {
+      background: #eab308;
+    }
+
+    .terminal-dot:nth-child(3) {
+      background: #22c55e;
+    }
+
+    .terminal pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .terminal .prompt {
+      color: var(--text-muted);
+    }
+
+    .terminal .command {
+      color: var(--accent);
+    }
+
+    .copy-hint {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 0.75rem;
+    }
+
+    /* Sections */
+    section {
+      padding: 4rem 0;
+      border-top: 1px solid var(--border);
+    }
+
+    section h2 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+      letter-spacing: -0.01em;
+    }
+
+    section .subtitle {
+      color: var(--text-muted);
+      font-size: 1rem;
+      margin-bottom: 2rem;
+    }
+
+    /* Features grid */
+    .features {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1.5rem;
+      margin-top: 2rem;
+    }
+
+    .feature {
+      padding: 1.25rem;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+
+    .feature-icon {
+      font-size: 1.5rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .feature h3 {
+      font-size: 0.95rem;
+      font-weight: 600;
+      margin-bottom: 0.25rem;
+    }
+
+    .feature p {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
+    /* Steps */
+    .steps {
+      margin-top: 2rem;
+    }
+
+    .step {
+      display: flex;
+      gap: 1.5rem;
+      margin-bottom: 2rem;
+      align-items: flex-start;
+    }
+
+    .step:last-child {
+      margin-bottom: 0;
+    }
+
+    .step-num {
+      flex-shrink: 0;
+      width: 2rem;
+      height: 2rem;
+      background: var(--accent);
+      color: var(--bg);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 0.9rem;
+    }
+
+    .step h3 {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 0.25rem;
+    }
+
+    .step p {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+    }
+
+    /* Cipi section */
+    .cipi-section {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 2.5rem;
+      margin-top: 2rem;
+    }
+
+    .cipi-section h2 {
+      margin-bottom: 0.5rem;
+    }
+
+    .cipi-section .subtitle {
+      margin-bottom: 1.5rem;
+    }
+
+    .cipi-features {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+
+    .cipi-feature {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.5rem;
+      font-size: 0.9rem;
+    }
+
+    .cipi-feature span:first-child {
+      font-size: 1rem;
+    }
+
+    .cipi-terminal {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      overflow-x: auto;
+    }
+
+    .cipi-terminal .line {
+      margin-bottom: 0.25rem;
+    }
+
+    .cipi-terminal .success {
+      color: var(--accent);
+    }
+
+    .cipi-cta {
+      display: inline-block;
+      margin-top: 1.5rem;
+      font-weight: 600;
+      font-size: 0.95rem;
+    }
+
+    /* Footer */
+    footer {
+      padding: 3rem 0;
+      border-top: 1px solid var(--border);
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+
+    footer a {
+      color: var(--text-muted);
+    }
+
+    footer a:hover {
+      color: var(--text);
+    }
+
+    @media (max-width: 640px) {
+      .hero {
+        padding: 3rem 0 4rem;
+      }
+
+      section {
+        padding: 3rem 0;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <header class="container">
+    <span class="logo">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" aria-hidden="true">
+        <rect width="32" height="32" rx="6" fill="var(--terminal-bg)" stroke="var(--border)" stroke-width="1"/>
+        <path d="M10 10 L18 16 L10 22" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+        <line x1="20" y1="22" x2="26" y2="22" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      conn
+    </span>
+    <nav>
+      <a href="#features">Features</a>
+      <a href="#how">How it works</a>
+      <a href="https://github.com/andreapollastri/conn.web.ap.it" target="_blank" rel="noopener">↗ GitHub</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="container">
+        <span class="badge">Free & Open Source</span>
+        <h1>SSH connections,<br><em>one command.</em></h1>
+        <p class="tagline">A lightweight Bash tool to manage servers with aliases. Stop memorizing hosts — connect
+          instantly.</p>
+
+        <div class="terminal">
+          <div class="terminal-header">
+            <span class="terminal-dot"></span>
+            <span class="terminal-dot"></span>
+            <span class="terminal-dot"></span>
+            <span>zsh — Terminal</span>
+          </div>
+          <pre><span class="prompt">$ </span><span class="command" id="install-cmd">curl -fsSL https://conn.web.ap.it/go.sh | bash</span></pre>
+          <p class="copy-hint">Click to copy</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="features">
+      <div class="container">
+        <h2>What's included</h2>
+        <p class="subtitle">Everything you need to manage SSH connections — no config files to hunt down.</p>
+
+        <div class="features">
+          <div class="feature">
+            <div class="feature-icon">⚡</div>
+            <h3>Aliases</h3>
+            <p>Store servers under short names. <code>conn to prod</code> instead of typing host, user, port.</p>
+          </div>
+          <div class="feature">
+            <div class="feature-icon">🔑</div>
+            <h3>Key management</h3>
+            <p>Create, view public/private keys. Clipboard copy for passwords on connect.</p>
+          </div>
+          <div class="feature">
+            <div class="feature-icon">🔄</div>
+            <h3>Self-update</h3>
+            <p><code>conn update</code> pulls the latest version from GitHub. Always current.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="how">
+      <div class="container">
+        <h2>How it works</h2>
+        <p class="subtitle">Three steps from zero to connected.</p>
+
+        <div class="steps">
+          <div class="step">
+            <span class="step-num">01</span>
+            <div>
+              <h3>Install</h3>
+              <p>Run the one-liner. The script downloads and installs <code>conn</code> to <code>/usr/local/bin</code> —
+                no clone required.</p>
+            </div>
+          </div>
+          <div class="step">
+            <span class="step-num">02</span>
+            <div>
+              <h3>Add your servers</h3>
+              <p>Run <code>conn add</code> and follow the wizard. Alias, user, host, port — optionally save the password
+                for clipboard copy on connect.</p>
+            </div>
+          </div>
+          <div class="step">
+            <span class="step-num">03</span>
+            <div>
+              <h3>Connect</h3>
+              <p><code>conn to production</code>. That's it. SSH key check, update check, password to clipboard — then
+                you're in.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="container">
+        <div class="cipi-section">
+          <h2>Perfect pairing with Cipi</h2>
+          <p class="subtitle">Use Conn with Cipi to manage and deploy Laravel to any VPS.</p>
+          <p style="margin-bottom: 1rem;">Once you've connected to your servers with <strong>conn</strong>, deploy your
+            apps with <a href="https://cipi.sh" target="_blank" rel="noopener">cipi.sh</a> — an open-source CLI built
+            exclusively for Laravel. One command installs a complete production stack on any Ubuntu VPS.</p>
+
+          <div class="cipi-features">
+            <div class="cipi-feature"><span>🔐</span><span>Full app isolation</span></div>
+            <div class="cipi-feature"><span>🚀</span><span>Zero-downtime deploys</span></div>
+            <div class="cipi-feature"><span>🛡️</span><span>Let's Encrypt SSL</span></div>
+          </div>
+
+          <div class="cipi-terminal">
+            <div class="line">$ wget -O -
+              https://raw.githubusercontent.com/andreapollastri/cipi/refs/heads/latest/install.sh | bash</div>
+            <div class="line success">✓ Cipi v4.0.0 installed successfully</div>
+            <div class="line">$ cipi app create --domain=myapp.com --php=8.4</div>
+            <div class="line success">✓ Linux user created · PHP 8.4 · MariaDB · Nginx</div>
+            <div class="line">$ cipi deploy myapp</div>
+            <div class="line success">✓ Release 14 live — zero downtime</div>
+            <div class="line">→ myapp.com is live. 🚀</div>
+          </div>
+
+          <a href="https://cipi.sh" target="_blank" rel="noopener" class="cipi-cta">Explore cipi.sh ↗</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="container">
+      <p>Open source · MIT · <a href="https://github.com/andreapollastri/conn.web.ap.it" target="_blank"
+          rel="noopener">GitHub</a></p>
+      <p style="margin-top: 0.5rem;">Made by <a href="https://web.ap.it" target="_blank" rel="noopener">Andrea
+          Pollastri</a></p>
+    </div>
+  </footer>
+
+  <script>
+    const cmd = document.getElementById('install-cmd');
+    const terminal = cmd.closest('.terminal');
+    terminal.style.cursor = 'pointer';
+    terminal.addEventListener('click', () => {
+      navigator.clipboard.writeText(cmd.textContent);
+      const hint = terminal.querySelector('.copy-hint');
+      hint.textContent = 'Copied!';
+      setTimeout(() => { hint.textContent = 'Click to copy'; }, 2000);
+    });
+  </script>
+</body>
+
+</html>
