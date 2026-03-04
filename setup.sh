@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Remote installer for conn — downloads and installs without cloning the repo
-# Usage: curl -fsSL https://conn.web.ap.it/go.sh | bash
+# Usage: curl -fsSL https://conn.web.ap.it/setup.sh | bash
 
 REPO_URL="https://raw.githubusercontent.com/andreapollastri/conn.web.ap.it/main"
 RED='\033[0;31m'

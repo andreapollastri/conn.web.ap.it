@@ -25,27 +25,10 @@ conn update               # Pull the latest version from GitHub
 ### Quick install (one-liner)
 
 ```bash
-curl -fsSL https://conn.web.ap.it/go.sh | bash
+curl -fsSL https://conn.web.ap.it/setup.sh | bash
 ```
 
 Downloads and installs `conn` to `/usr/local/bin`
-
-### Altenative install (from repo)
-
-```bash
-git clone https://github.com/andreapollastri/conn.web.ap.it.git
-cd conn.web.ap.it
-chmod +x src/install.sh && ./src/install.sh
-```
-
-The installer copies `conn` to `/usr/local/bin` so the command is available system-wide from any directory.
-
-### Local usage (no install)
-
-```bash
-chmod +x src/conn
-./src/conn <command>
-```
 
 ---
 
