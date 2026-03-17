@@ -63,6 +63,7 @@ Type user (default: root): deploy
 Type host: prod.example.com
 Type port (default: 22): 22
 Password (optional — copied to clipboard on connect):
+Type remote folder (optional): /var/www/myapp
 ```
 
 ### Listing servers
@@ -76,17 +77,23 @@ conn list
 ║                          SSH SERVERS LIST                                  ║
 ╚════════════════════════════════════════════════════════════════════════════╝
 
-  ALIAS                 USER                       HOST                  PORT
-  ────────────────────────────────────────────────────────────────────────────
-  production            root                       prod.example.com      22   🔑
-  staging               deploy                     staging.example.com   2222
-  myserver              andrea                     192.168.1.100         22
+  production 🔑 📂
+  ↳ root@prod.example.com:22
+  ↳ /var/www/myapp
 
-  ────────────────────────────────────────────────────────────────────────────
+  staging
+  ↳ deploy@staging.example.com:2222
+
+  myserver
+  ↳ andrea@192.168.1.100:22
+
+────────────────────────────────────────────────────────────────────────────
   💡  Use conn to <alias> to connect
+  🔑 saved password  📂 remote folder
 ```
 
 > 🔑 indicates a saved password that will be automatically copied to the clipboard on connect.
+> 📂 indicates a remote folder that the session will automatically cd into on connect.
 
 ### Connecting
 
@@ -99,7 +106,7 @@ Before opening the SSH session, `conn` will:
 1. Verify that an SSH key pair exists (warns if missing)
 2. Check for available script updates
 3. Copy the saved password to the clipboard (if one is stored)
-4. Hand off to `ssh`
+4. Hand off to `ssh` (and automatically `cd` into the remote folder, if configured)
 
 ### Managing SSH keys
 
@@ -127,7 +134,7 @@ Connections are persisted in a plain-text file:
 ~/.ssh_connections.conf
 ```
 
-Each line follows the format `alias|user|host|port|password`. You can back it up, version-control it, or copy it between machines freely.
+Each line follows the format `alias|user|host|port|password|folder`. You can back it up, version-control it, or copy it between machines freely. The `folder` field is optional — when set, the SSH session will automatically `cd` into that directory on connect.
 
 > **Security note:** Passwords are stored in plain text. Where possible, prefer SSH key-based authentication and leave the password field empty.
 

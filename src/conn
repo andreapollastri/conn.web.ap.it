@@ -40,6 +40,7 @@ show_help() {
     echo "  ~/.ssh_connections.conf"
     echo ""
     echo -e "${YELLOW}Note:${NC} Saved passwords are copied to clipboard during connection (🔑)"
+    echo -e "${YELLOW}Note:${NC} Remote folders allow auto-cd into a directory on connect (📂)"
     echo ""
 }
 
@@ -59,41 +60,28 @@ list_connections() {
     echo -e "${BLUE}╚════════════════════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
-    # Print header
-    printf "  ${BLUE}%-20s${NC}  ${BLUE}%-25s${NC}  ${BLUE}%-20s${NC}  ${BLUE}%-6s${NC}\n" "ALIAS" "USER" "HOST" "PORT"
-    echo -e "  ${BLUE}────────────────────────────────────────────────────────────────────────────${NC}"
-
-    # Print connections
-    sort "$CONFIG_FILE" | while IFS='|' read -r alias user host port password; do
+    sort "$CONFIG_FILE" | while IFS='|' read -r alias user host port password folder; do
         if [ -n "$alias" ]; then
-            # Truncate long values for better display
-            display_alias="$alias"
-            display_user="$user"
-            display_host="$host"
-
-            if [ ${#display_alias} -gt 20 ]; then
-                display_alias="${display_alias:0:17}..."
-            fi
-            if [ ${#display_user} -gt 25 ]; then
-                display_user="${display_user:0:22}..."
-            fi
-            if [ ${#display_host} -gt 20 ]; then
-                display_host="${display_host:0:17}..."
-            fi
-
-            # Add lock icon if password exists
-            local pwd_icon=""
+            local icons=""
             if [ -n "$password" ]; then
-                pwd_icon=" ${YELLOW}🔑${NC}"
+                icons+=" 🔑"
+            fi
+            if [ -n "$folder" ]; then
+                icons+=" 📂"
             fi
 
-            printf "  ${GREEN}%-20s${NC}  %-25s  %-20s  ${YELLOW}%-6s${NC}${pwd_icon}\n" "$display_alias" "$display_user" "$display_host" "$port"
+            echo -e "  ${GREEN}${alias}${NC}${YELLOW}${icons}${NC}"
+            echo -e "  ${BLUE}↳${NC} ${user}@${host}:${port}"
+            if [ -n "$folder" ]; then
+                echo -e "  ${BLUE}↳${NC} ${folder}"
+            fi
+            echo ""
         fi
     done
 
-    echo ""
     echo -e "${BLUE}────────────────────────────────────────────────────────────────────────────${NC}"
     echo -e "  ${YELLOW}💡 Tip:${NC} Use ${GREEN}conn to <alias>${NC} to connect"
+    echo -e "  🔑 saved password  📂 remote folder"
     echo ""
 }
 
@@ -119,7 +107,7 @@ show_connection_info() {
     fi
 
     # Extract details
-    IFS='|' read -r al user host port password <<< "$connection"
+    IFS='|' read -r al user host port password folder <<< "$connection"
 
     echo ""
     echo -e "${BLUE}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
@@ -136,6 +124,12 @@ show_connection_info() {
         echo -e "${GREEN}Password:${NC}   ${RED}$password${NC} ${YELLOW}(⚠️ visible in plain text)${NC}"
     else
         echo -e "${GREEN}Password:${NC}   ${YELLOW}Not saved${NC}"
+    fi
+
+    if [ -n "$folder" ]; then
+        echo -e "${GREEN}Folder:${NC}     $folder"
+    else
+        echo -e "${GREEN}Folder:${NC}     ${YELLOW}Not set${NC}"
     fi
 
     echo ""
@@ -185,12 +179,19 @@ add_connection() {
     read -s -p "Type password (optional): " password
     echo ""
     
+    # Request remote folder (optional)
+    echo ""
+    read -p "Type remote folder (optional): " folder
+    
     # Save the connection
-    echo "$alias|$user|$host|$port|$password" >> "$CONFIG_FILE"
+    echo "$alias|$user|$host|$port|$password|$folder" >> "$CONFIG_FILE"
     
     echo ""
     echo -e "${GREEN}✓ Connection '$alias' added successfully!${NC}"
     echo -e "  ${user}@${host}:${port}"
+    if [ -n "$folder" ]; then
+        echo -e "  ${YELLOW}(will open in $folder)${NC}"
+    fi
     if [ -n "$password" ]; then
         echo -e "  ${YELLOW}(password will be copied to clipboard on connect)${NC}"
     fi
@@ -217,7 +218,7 @@ edit_connection() {
     
     # Get current connection details
     connection=$(grep "^$old_alias|" "$CONFIG_FILE")
-    IFS='|' read -r current_alias current_user current_host current_port current_password <<< "$connection"
+    IFS='|' read -r current_alias current_user current_host current_port current_password current_folder <<< "$connection"
     
     echo -e "${BLUE}=== Edit SSH Connection ===${NC}"
     echo ""
@@ -258,11 +259,25 @@ edit_connection() {
     
     # Handle password
     if [ -z "$new_password" ]; then
-        # Keep current password
         new_password="$current_password"
     elif [ "$new_password" = "REMOVE" ]; then
-        # Remove password
         new_password=""
+    fi
+    
+    # Request new folder
+    echo ""
+    if [ -n "$current_folder" ]; then
+        echo -e "${YELLOW}Remote folder (current: $current_folder, press Enter to keep, type 'REMOVE' to delete):${NC}"
+    else
+        echo -e "${YELLOW}Remote folder (optional - will cd into this folder on connect):${NC}"
+    fi
+    read -p "Type remote folder: " new_folder
+    
+    # Handle folder
+    if [ -z "$new_folder" ]; then
+        new_folder="$current_folder"
+    elif [ "$new_folder" = "REMOVE" ]; then
+        new_folder=""
     fi
     
     # Remove old connection
@@ -270,7 +285,7 @@ edit_connection() {
     rm -f "${CONFIG_FILE}.bak"
     
     # Add updated connection
-    echo "$new_alias|$new_user|$new_host|$new_port|$new_password" >> "$CONFIG_FILE"
+    echo "$new_alias|$new_user|$new_host|$new_port|$new_password|$new_folder" >> "$CONFIG_FILE"
     
     echo ""
     echo -e "${GREEN}✓ Connection updated successfully!${NC}"
@@ -278,6 +293,9 @@ edit_connection() {
         echo -e "  ${YELLOW}Alias changed: $current_alias → $new_alias${NC}"
     fi
     echo -e "  ${new_user}@${new_host}:${new_port}"
+    if [ -n "$new_folder" ]; then
+        echo -e "  ${YELLOW}(will open in $new_folder)${NC}"
+    fi
     if [ -n "$new_password" ]; then
         echo -e "  ${YELLOW}(password will be copied to clipboard on connect)${NC}"
     fi
@@ -304,11 +322,14 @@ remove_connection() {
     
     # Show connection details
     connection=$(grep "^$alias|" "$CONFIG_FILE")
-    IFS='|' read -r al user host port password <<< "$connection"
+    IFS='|' read -r al user host port password folder <<< "$connection"
     
     echo -e "${YELLOW}You are about to remove:${NC}"
     echo -e "  Alias: ${GREEN}$al${NC}"
     echo -e "  Connection: ${user}@${host}:${port}"
+    if [ -n "$folder" ]; then
+        echo -e "  ${YELLOW}(remote folder: $folder 📂)${NC}"
+    fi
     if [ -n "$password" ]; then
         echo -e "  ${YELLOW}(with saved password 🔑)${NC}"
     fi
@@ -368,10 +389,13 @@ connect_to() {
     fi
     
     # Extract details
-    IFS='|' read -r al user host port password <<< "$connection"
+    IFS='|' read -r al user host port password folder <<< "$connection"
     
     echo -e "${GREEN}Connecting to $alias...${NC}"
     echo -e "  ${user}@${host}:${port}"
+    if [ -n "$folder" ]; then
+        echo -e "  ${YELLOW}📂 $folder${NC}"
+    fi
     
     # Copy password to clipboard if present
     if [ -n "$password" ]; then
@@ -396,7 +420,11 @@ connect_to() {
     echo ""
     
     # Execute SSH connection
-    ssh "$user@$host" -p "$port"
+    if [ -n "$folder" ]; then
+        ssh "$user@$host" -p "$port" -t "cd \"$folder\" && exec \$SHELL -l"
+    else
+        ssh "$user@$host" -p "$port"
+    fi
 }
 
 # Function to reset SSH keys
@@ -420,7 +448,7 @@ reset_host() {
     fi
     
     # Extract host
-    IFS='|' read -r al user host port password <<< "$connection"
+    IFS='|' read -r al user host port password folder <<< "$connection"
     
     echo -e "${YELLOW}Resetting SSH keys for:${NC}"
     echo -e "  Host: ${host}"
