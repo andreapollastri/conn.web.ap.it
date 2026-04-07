@@ -80,15 +80,19 @@ list_connections() {
 
     # Column widths (minimums; expanded if content is wider)
     local W_ALIAS=14
-    local W_CONN=28
+    local W_USER=8
+    local W_HOST=16
+    local W_PORT=4
     local W_FOLDER=20
-    local W_NOTES=8
+    # Emoji in Notes can be 2 cells wide in terminals; keep a bit of slack
+    local W_NOTES=10
 
     while IFS='|' read -r _a _u _h _p _pw _f; do
         [ -z "$_a" ] && continue
         [ ${#_a} -gt "$W_ALIAS" ] && W_ALIAS=${#_a}
-        local _conn="${_u}@${_h}:${_p}"
-        [ ${#_conn} -gt "$W_CONN" ] && W_CONN=${#_conn}
+        [ ${#_u} -gt "$W_USER" ] && W_USER=${#_u}
+        [ ${#_h} -gt "$W_HOST" ] && W_HOST=${#_h}
+        [ ${#_p} -gt "$W_PORT" ] && W_PORT=${#_p}
         if [ -n "$_f" ]; then
             [ ${#_f} -gt "$W_FOLDER" ] && W_FOLDER=${#_f}
         fi
@@ -96,33 +100,39 @@ list_connections() {
 
     # Sensible caps so very long lines do not break narrow terminals
     [ "$W_ALIAS" -gt 24 ] && W_ALIAS=24
-    [ "$W_CONN" -gt 42 ] && W_CONN=42
+    [ "$W_USER" -gt 20 ] && W_USER=20
+    [ "$W_HOST" -gt 36 ] && W_HOST=36
+    [ "$W_PORT" -gt 5 ] && W_PORT=5
     [ "$W_FOLDER" -gt 32 ] && W_FOLDER=32
 
-    # Must match ┌─────┬...┐ line length (11 + sum of column widths)
-    local border_len=$((11 + W_ALIAS + W_CONN + W_FOLDER + W_NOTES))
+    # Must match ┌─────┬...┐ line length: 13 + sum of widths (┌ + 5 + 6×┬ + ┐ + column dashes)
+    local border_len=$((13 + W_ALIAS + W_USER + W_HOST + W_PORT + W_FOLDER + W_NOTES))
     local title_bar
     title_bar=$(_repeat_char $((border_len - 2)) "═")
 
     echo ""
     echo -e "${BLUE}╔${title_bar}╗${NC}"
-    printf "${BLUE}║ %-$((border_len - 4))s ║${NC}\n" "  SSH SERVERS LIST"
+    # Title text padded to match inner width (between ║ and ║) = border_len - 2
+    printf "${BLUE}║ %-$((border_len - 4))s ║${NC}\n" " SSH SERVERS LIST"
     echo -e "${BLUE}╚${title_bar}╝${NC}"
     echo ""
 
-    local h_alias h_conn h_folder
+    local h_alias h_user h_host h_port h_folder
     h_alias=$(_truncate_cell "Alias" "$W_ALIAS")
-    h_conn=$(_truncate_cell "Connection" "$W_CONN")
+    h_user=$(_truncate_cell "User" "$W_USER")
+    h_host=$(_truncate_cell "Host" "$W_HOST")
+    h_port=$(_truncate_cell "Port" "$W_PORT")
     h_folder=$(_truncate_cell "Remote folder" "$W_FOLDER")
 
     local top mid bot
-    top="┌$(_repeat_char 5 '─')┬$(_repeat_char "$W_ALIAS" '─')┬$(_repeat_char "$W_CONN" '─')┬$(_repeat_char "$W_FOLDER" '─')┬$(_repeat_char "$W_NOTES" '─')┐"
-    mid="├$(_repeat_char 5 '─')┼$(_repeat_char "$W_ALIAS" '─')┼$(_repeat_char "$W_CONN" '─')┼$(_repeat_char "$W_FOLDER" '─')┼$(_repeat_char "$W_NOTES" '─')┤"
-    bot="└$(_repeat_char 5 '─')┴$(_repeat_char "$W_ALIAS" '─')┴$(_repeat_char "$W_CONN" '─')┴$(_repeat_char "$W_FOLDER" '─')┴$(_repeat_char "$W_NOTES" '─')┘"
+    top="┌$(_repeat_char 5 '─')┬$(_repeat_char "$W_ALIAS" '─')┬$(_repeat_char "$W_USER" '─')┬$(_repeat_char "$W_HOST" '─')┬$(_repeat_char "$W_PORT" '─')┬$(_repeat_char "$W_FOLDER" '─')┬$(_repeat_char "$W_NOTES" '─')┐"
+    mid="├$(_repeat_char 5 '─')┼$(_repeat_char "$W_ALIAS" '─')┼$(_repeat_char "$W_USER" '─')┼$(_repeat_char "$W_HOST" '─')┼$(_repeat_char "$W_PORT" '─')┼$(_repeat_char "$W_FOLDER" '─')┼$(_repeat_char "$W_NOTES" '─')┤"
+    bot="└$(_repeat_char 5 '─')┴$(_repeat_char "$W_ALIAS" '─')┴$(_repeat_char "$W_USER" '─')┴$(_repeat_char "$W_HOST" '─')┴$(_repeat_char "$W_PORT" '─')┴$(_repeat_char "$W_FOLDER" '─')┴$(_repeat_char "$W_NOTES" '─')┘"
 
     echo -e "${BLUE}${top}${NC}"
-    printf "${BLUE}│${NC} %3s ${BLUE}│${NC} %-${W_ALIAS}s ${BLUE}│${NC} %-${W_CONN}s ${BLUE}│${NC} %-${W_FOLDER}s ${BLUE}│${NC} %-${W_NOTES}s ${BLUE}│${NC}\n" \
-        "#" "$h_alias" "$h_conn" "$h_folder" "Notes"
+    # No extra spaces between │ and fields: inner width must match ─ count exactly
+    printf "${BLUE}│${NC}%5s${BLUE}│${NC}%-${W_ALIAS}s${BLUE}│${NC}%-${W_USER}s${BLUE}│${NC}%-${W_HOST}s${BLUE}│${NC}%-${W_PORT}s${BLUE}│${NC}%-${W_FOLDER}s${BLUE}│${NC}%-${W_NOTES}s${BLUE}│${NC}\n" \
+        "#" "$h_alias" "$h_user" "$h_host" "$h_port" "$h_folder" "Notes"
     echo -e "${BLUE}${mid}${NC}"
 
     local idx=0
@@ -130,28 +140,30 @@ list_connections() {
         [ -z "$alias" ] && continue
         idx=$((idx + 1))
 
-        local conn="${user}@${host}:${port}"
         local notes=""
         [ -n "$password" ] && notes+="🔑"
         [ -n "$folder" ] && notes+="📂"
-        [ -z "$notes" ] && notes="—"
+        [ -z "$notes" ] && notes="-"
 
-        local ca cc cf
+        local ca cu ch cp cf
         ca=$(_truncate_cell "$alias" "$W_ALIAS")
-        cc=$(_truncate_cell "$conn" "$W_CONN")
+        cu=$(_truncate_cell "$user" "$W_USER")
+        ch=$(_truncate_cell "$host" "$W_HOST")
+        cp=$(_truncate_cell "$port" "$W_PORT")
         if [ -n "$folder" ]; then
             cf=$(_truncate_cell "$folder" "$W_FOLDER")
         else
-            cf=$(_truncate_cell "—" "$W_FOLDER")
+            # ASCII '-' so printf column widths match box lines (bash 3.2 counts bytes for %s)
+            cf=$(_truncate_cell "-" "$W_FOLDER")
         fi
 
-        printf "${BLUE}│${NC} ${GREEN}%3d${NC} ${BLUE}│${NC} %-${W_ALIAS}s ${BLUE}│${NC} %-${W_CONN}s ${BLUE}│${NC} %-${W_FOLDER}s ${BLUE}│${NC} %-${W_NOTES}s ${BLUE}│${NC}\n" \
-            "$idx" "$ca" "$cc" "$cf" "$notes"
+        printf "${BLUE}│${NC}${GREEN}%5d${NC}${BLUE}│${NC}%-${W_ALIAS}s${BLUE}│${NC}%-${W_USER}s${BLUE}│${NC}%-${W_HOST}s${BLUE}│${NC}%-${W_PORT}s${BLUE}│${NC}%-${W_FOLDER}s${BLUE}│${NC}%-${W_NOTES}s${BLUE}│${NC}\n" \
+            "$idx" "$ca" "$cu" "$ch" "$cp" "$cf" "$notes"
     done < <(sort "$CONFIG_FILE")
 
     echo -e "${BLUE}${bot}${NC}"
     echo ""
-    echo -e "${BLUE}────────────────────────────────────────────────────────────────────────────${NC}"
+    echo -e "${BLUE}$(_repeat_char "$border_len" "─")${NC}"
     echo -e "  ${YELLOW}💡 Tip:${NC} Use ${GREEN}conn to <alias>${NC} to connect"
     echo -e "  ${YELLOW}🔑${NC} saved password   ${YELLOW}📂${NC} remote folder"
     echo ""
