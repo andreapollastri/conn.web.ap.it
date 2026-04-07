@@ -44,6 +44,30 @@ show_help() {
     echo ""
 }
 
+# Truncate string to max length (for table cells)
+_truncate_cell() {
+    local s="$1"
+    local max="$2"
+    local len=${#s}
+    if [ "$len" -gt "$max" ]; then
+        echo "${s:0:$((max - 3))}..."
+    else
+        echo "$s"
+    fi
+}
+
+# Repeat character (for table borders)
+_repeat_char() {
+    local n="$1"
+    local c="${2:--}"
+    local out=""
+    local i
+    for ((i = 0; i < n; i++)); do
+        out+="$c"
+    done
+    printf '%s' "$out"
+}
+
 # Function to list all connections
 list_connections() {
     init_config
@@ -54,34 +78,82 @@ list_connections() {
         return
     fi
 
-    echo ""
-    echo -e "${BLUE}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║                          SSH SERVERS LIST                                  ║${NC}"
-    echo -e "${BLUE}╚════════════════════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
+    # Column widths (minimums; expanded if content is wider)
+    local W_ALIAS=14
+    local W_CONN=28
+    local W_FOLDER=20
+    local W_NOTES=8
 
-    sort "$CONFIG_FILE" | while IFS='|' read -r alias user host port password folder; do
-        if [ -n "$alias" ]; then
-            local icons=""
-            if [ -n "$password" ]; then
-                icons+=" 🔑"
-            fi
-            if [ -n "$folder" ]; then
-                icons+=" 📂"
-            fi
-
-            echo -e "  ${GREEN}${alias}${NC}${YELLOW}${icons}${NC}"
-            echo -e "  ${BLUE}↳${NC} ${user}@${host}:${port}"
-            if [ -n "$folder" ]; then
-                echo -e "  ${BLUE}↳${NC} ${folder}"
-            fi
-            echo ""
+    while IFS='|' read -r _a _u _h _p _pw _f; do
+        [ -z "$_a" ] && continue
+        [ ${#_a} -gt "$W_ALIAS" ] && W_ALIAS=${#_a}
+        local _conn="${_u}@${_h}:${_p}"
+        [ ${#_conn} -gt "$W_CONN" ] && W_CONN=${#_conn}
+        if [ -n "$_f" ]; then
+            [ ${#_f} -gt "$W_FOLDER" ] && W_FOLDER=${#_f}
         fi
-    done
+    done < <(sort "$CONFIG_FILE")
 
+    # Sensible caps so very long lines do not break narrow terminals
+    [ "$W_ALIAS" -gt 24 ] && W_ALIAS=24
+    [ "$W_CONN" -gt 42 ] && W_CONN=42
+    [ "$W_FOLDER" -gt 32 ] && W_FOLDER=32
+
+    # Must match ┌─────┬...┐ line length (11 + sum of column widths)
+    local border_len=$((11 + W_ALIAS + W_CONN + W_FOLDER + W_NOTES))
+    local title_bar
+    title_bar=$(_repeat_char $((border_len - 2)) "═")
+
+    echo ""
+    echo -e "${BLUE}╔${title_bar}╗${NC}"
+    printf "${BLUE}║ %-$((border_len - 4))s ║${NC}\n" "  SSH SERVERS LIST"
+    echo -e "${BLUE}╚${title_bar}╝${NC}"
+    echo ""
+
+    local h_alias h_conn h_folder
+    h_alias=$(_truncate_cell "Alias" "$W_ALIAS")
+    h_conn=$(_truncate_cell "Connection" "$W_CONN")
+    h_folder=$(_truncate_cell "Remote folder" "$W_FOLDER")
+
+    local top mid bot
+    top="┌$(_repeat_char 5 '─')┬$(_repeat_char "$W_ALIAS" '─')┬$(_repeat_char "$W_CONN" '─')┬$(_repeat_char "$W_FOLDER" '─')┬$(_repeat_char "$W_NOTES" '─')┐"
+    mid="├$(_repeat_char 5 '─')┼$(_repeat_char "$W_ALIAS" '─')┼$(_repeat_char "$W_CONN" '─')┼$(_repeat_char "$W_FOLDER" '─')┼$(_repeat_char "$W_NOTES" '─')┤"
+    bot="└$(_repeat_char 5 '─')┴$(_repeat_char "$W_ALIAS" '─')┴$(_repeat_char "$W_CONN" '─')┴$(_repeat_char "$W_FOLDER" '─')┴$(_repeat_char "$W_NOTES" '─')┘"
+
+    echo -e "${BLUE}${top}${NC}"
+    printf "${BLUE}│${NC} %3s ${BLUE}│${NC} %-${W_ALIAS}s ${BLUE}│${NC} %-${W_CONN}s ${BLUE}│${NC} %-${W_FOLDER}s ${BLUE}│${NC} %-${W_NOTES}s ${BLUE}│${NC}\n" \
+        "#" "$h_alias" "$h_conn" "$h_folder" "Notes"
+    echo -e "${BLUE}${mid}${NC}"
+
+    local idx=0
+    while IFS='|' read -r alias user host port password folder; do
+        [ -z "$alias" ] && continue
+        idx=$((idx + 1))
+
+        local conn="${user}@${host}:${port}"
+        local notes=""
+        [ -n "$password" ] && notes+="🔑"
+        [ -n "$folder" ] && notes+="📂"
+        [ -z "$notes" ] && notes="—"
+
+        local ca cc cf
+        ca=$(_truncate_cell "$alias" "$W_ALIAS")
+        cc=$(_truncate_cell "$conn" "$W_CONN")
+        if [ -n "$folder" ]; then
+            cf=$(_truncate_cell "$folder" "$W_FOLDER")
+        else
+            cf=$(_truncate_cell "—" "$W_FOLDER")
+        fi
+
+        printf "${BLUE}│${NC} ${GREEN}%3d${NC} ${BLUE}│${NC} %-${W_ALIAS}s ${BLUE}│${NC} %-${W_CONN}s ${BLUE}│${NC} %-${W_FOLDER}s ${BLUE}│${NC} %-${W_NOTES}s ${BLUE}│${NC}\n" \
+            "$idx" "$ca" "$cc" "$cf" "$notes"
+    done < <(sort "$CONFIG_FILE")
+
+    echo -e "${BLUE}${bot}${NC}"
+    echo ""
     echo -e "${BLUE}────────────────────────────────────────────────────────────────────────────${NC}"
     echo -e "  ${YELLOW}💡 Tip:${NC} Use ${GREEN}conn to <alias>${NC} to connect"
-    echo -e "  🔑 saved password  📂 remote folder"
+    echo -e "  ${YELLOW}🔑${NC} saved password   ${YELLOW}📂${NC} remote folder"
     echo ""
 }
 
