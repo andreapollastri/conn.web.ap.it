@@ -10,7 +10,11 @@ SECRETS_FILE="${CONN_SECRETS_FILE:-$HOME/.ssh_connections.secrets}"
 UPDATE_CACHE_FILE="${CONN_UPDATE_CACHE:-$HOME/.cache/conn/last_update_check}"
 UPDATE_CACHE_TTL="${CONN_UPDATE_TTL:-86400}"
 SECRET_SERVICE="conn.web.ap.it"
-REPO_URL="https://raw.githubusercontent.com/andreapollastri/conn.web.ap.it/main/src/conn"
+REPO_OWNER="andreapollastri"
+REPO_NAME="conn.web.ap.it"
+REPO_FILE="src/conn"
+# Fallback only — prefer SHA URL from GitHub API (branch raw CDN can stay stale).
+REPO_URL="https://cdn.jsdelivr.net/gh/${REPO_OWNER}/${REPO_NAME}@main/${REPO_FILE}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -414,6 +418,46 @@ _has_ssh_key() {
     local k
     k="$(_default_private_key)"
     [ -n "$k" ]
+}
+
+# Resolve a fresh download URL for src/conn.
+# raw.githubusercontent.com/.../main/... is CDN-cached and often lags behind pushes;
+# pin to the latest commit SHA (immutable) when the API is reachable.
+_remote_script_url() {
+    local sha="" api
+    api="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/commits/main"
+    if command -v curl >/dev/null 2>&1; then
+        sha=$(curl -fsSL --connect-timeout 3 --max-time 8 "$api" 2>/dev/null \
+            | grep -o '"sha"[[:space:]]*:[[:space:]]*"[0-9a-f]\{40\}"' \
+            | head -1 \
+            | grep -o '[0-9a-f]\{40\}')
+    elif command -v wget >/dev/null 2>&1; then
+        sha=$(wget -q -T 8 -O - "$api" 2>/dev/null \
+            | grep -o '"sha"[[:space:]]*:[[:space:]]*"[0-9a-f]\{40\}"' \
+            | head -1 \
+            | grep -o '[0-9a-f]\{40\}')
+    fi
+    if [ -n "$sha" ]; then
+        printf 'https://raw.githubusercontent.com/%s/%s/%s/%s' \
+            "$REPO_OWNER" "$REPO_NAME" "$sha" "$REPO_FILE"
+    else
+        printf '%s' "$REPO_URL"
+    fi
+}
+
+_download_remote_script() {
+    local dest="$1"
+    local url
+    url="$(_remote_script_url)"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --connect-timeout 5 --max-time 30 \
+            -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+            "$url" -o "$dest"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -T 30 --no-cache -O "$dest" "$url"
+    else
+        return 1
+    fi
 }
 
 _resolve_script_path() {
@@ -1386,17 +1430,7 @@ check_for_updates() {
     local tmp_file script_path
     tmp_file=$(mktemp) || return 0
 
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --connect-timeout 3 --max-time 8 "$REPO_URL" -o "$tmp_file" 2>/dev/null || {
-            rm -f "$tmp_file"
-            return 0
-        }
-    elif command -v wget >/dev/null 2>&1; then
-        wget -q -T 8 -O "$tmp_file" "$REPO_URL" 2>/dev/null || {
-            rm -f "$tmp_file"
-            return 0
-        }
-    else
+    if ! _download_remote_script "$tmp_file" 2>/dev/null; then
         rm -f "$tmp_file"
         return 0
     fi
@@ -1448,17 +1482,11 @@ update_script() {
     local tmp_file staging
     tmp_file=$(mktemp) || return 1
     staging="${script_path}.new"
-    # Cache-bust raw.githubusercontent.com (CDN can briefly serve stale/partial bodies)
-    local download_url="${REPO_URL}?t=$(date +%s)"
 
     echo "Downloading latest version from GitHub..."
 
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$download_url" -o "$tmp_file"
-    elif command -v wget >/dev/null 2>&1; then
-        wget -q --no-cache -O "$tmp_file" "$download_url"
-    else
-        echo -e "${RED}Error: neither curl nor wget is available!${NC}"
+    if ! _download_remote_script "$tmp_file"; then
+        echo -e "${RED}Error: neither curl nor wget is available, or download failed!${NC}"
         rm -f "$tmp_file"
         return 1
     fi
