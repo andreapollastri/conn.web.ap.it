@@ -1,50 +1,432 @@
 #!/bin/bash
 
-# Configuration file to store connections
-CONFIG_FILE="$HOME/.ssh_connections.conf"
+# conn — SSH Connection Manager
+# Config:  ~/.ssh_connections.conf
+# Format:  alias|user|host|port|folder|identity|proxyjump
+# Secrets: OS keychain / secret-tool / pass / ~/.ssh_connections.secrets (chmod 600)
 
-# Colors for output
+CONFIG_FILE="${CONN_CONFIG_FILE:-$HOME/.ssh_connections.conf}"
+SECRETS_FILE="${CONN_SECRETS_FILE:-$HOME/.ssh_connections.secrets}"
+UPDATE_CACHE_FILE="${CONN_UPDATE_CACHE:-$HOME/.cache/conn/last_update_check}"
+UPDATE_CACHE_TTL="${CONN_UPDATE_TTL:-86400}"
+SECRET_SERVICE="conn.web.ap.it"
+REPO_URL="https://raw.githubusercontent.com/andreapollastri/conn.web.ap.it/main/src/conn"
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Function to create the configuration file if it doesn't exist
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
 init_config() {
+    local dir
+    dir="$(dirname "$CONFIG_FILE")"
+    mkdir -p "$dir" 2>/dev/null || true
     if [ ! -f "$CONFIG_FILE" ]; then
         touch "$CONFIG_FILE"
+        chmod 600 "$CONFIG_FILE"
         echo -e "${GREEN}Configuration file created: $CONFIG_FILE${NC}"
+    else
+        chmod 600 "$CONFIG_FILE" 2>/dev/null || true
+    fi
+    _migrate_config_if_needed
+}
+
+_field_has_pipe() {
+    case "$1" in
+        *'|'*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+_validate_field() {
+    local name="$1"
+    local value="$2"
+    if _field_has_pipe "$value"; then
+        echo -e "${RED}Error: $name cannot contain '|'${NC}" >&2
+        return 1
+    fi
+    return 0
+}
+
+_validate_alias() {
+    local a="$1"
+    if [ -z "$a" ]; then
+        echo -e "${RED}Error: alias cannot be empty!${NC}" >&2
+        return 1
+    fi
+    if ! _validate_field "alias" "$a"; then
+        return 1
+    fi
+    case "$a" in
+        *[[:space:]]*)
+            echo -e "${RED}Error: alias cannot contain spaces!${NC}" >&2
+            return 1
+            ;;
+    esac
+    return 0
+}
+
+_validate_port() {
+    local p="$1"
+    case "$p" in
+        ''|*[!0-9]*)
+            echo -e "${RED}Error: port must be a number!${NC}" >&2
+            return 1
+            ;;
+    esac
+    if [ "$p" -lt 1 ] || [ "$p" -gt 65535 ]; then
+        echo -e "${RED}Error: port must be between 1 and 65535!${NC}" >&2
+        return 1
+    fi
+    return 0
+}
+
+# Parse a config line into globals: _c_alias _c_user _c_host _c_port _c_folder _c_identity _c_jump
+# Legacy (5 pipes):  alias|user|host|port|password|folder
+# Current (6 pipes): alias|user|host|port|folder|identity|proxyjump
+_parse_line() {
+    local line="$1"
+    local f1 f2 f3 f4 f5 f6 f7 pipes
+    IFS='|' read -r f1 f2 f3 f4 f5 f6 f7 <<< "$line"
+    pipes=$(awk -F'|' '{print NF-1}' <<< "$line")
+
+    _c_alias="$f1"
+    _c_user="$f2"
+    _c_host="$f3"
+    _c_port="$f4"
+    _c_folder=""
+    _c_identity=""
+    _c_jump=""
+    _c_legacy_password=""
+
+    if [ "$pipes" -ge 6 ]; then
+        _c_folder="$f5"
+        _c_identity="$f6"
+        _c_jump="$f7"
+    else
+        _c_legacy_password="$f5"
+        _c_folder="$f6"
     fi
 }
 
-# Function to show help
-show_help() {
-    echo -e "${BLUE}=== SSH Connection Manager ===${NC}"
-    echo ""
-    echo "Usage: conn <command> [options]"
-    echo ""
-    echo "Available commands:"
-    echo "  to <alias>         - Connect to the server with the specified alias"
-    echo "  list               - Show the list of all configured servers"
-    echo "  info <alias>       - Show detailed information about a connection"
-    echo "  add                - Add a new connection"
-    echo "  edit <alias>       - Edit an existing connection"
-    echo "  remove <alias>     - Remove an existing connection"
-    echo "  reset <alias>      - Remove SSH host key for the specified alias"
-    echo "  key <action>       - Manage SSH keys (public|private|create)"
-    echo "  update             - Update the script to the latest version from GitHub"
-    echo "  help               - Show this help message"
-    echo ""
-    echo -e "${YELLOW}Tip:${NC} You can backup or manually edit connections at:"
-    echo "  ~/.ssh_connections.conf"
-    echo ""
-    echo -e "${YELLOW}Note:${NC} Saved passwords are copied to clipboard during connection (🔑)"
-    echo -e "${YELLOW}Note:${NC} Remote folders allow auto-cd into a directory on connect (📂)"
-    echo ""
+_format_line() {
+    local a="$1" u="$2" h="$3" p="$4" f="$5" i="$6" j="$7"
+    printf '%s|%s|%s|%s|%s|%s|%s\n' "$a" "$u" "$h" "$p" "$f" "$i" "$j"
 }
 
-# Truncate string to max length (for table cells)
+_get_connection() {
+    local needle="$1"
+    local line
+    _c_alias="" _c_user="" _c_host="" _c_port="" _c_folder="" _c_identity="" _c_jump="" _c_legacy_password=""
+
+    [ ! -f "$CONFIG_FILE" ] && return 1
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -z "$line" ] && continue
+        case "$line" in
+            \#*) continue ;;
+        esac
+        if [ "${line%%|*}" = "$needle" ]; then
+            _parse_line "$line"
+            return 0
+        fi
+    done < "$CONFIG_FILE"
+    return 1
+}
+
+_connection_exists() {
+    _get_connection "$1"
+}
+
+_delete_connection_line() {
+    local needle="$1"
+    local tmp line
+    tmp=$(mktemp) || return 1
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -z "$line" ] && continue
+        if [ "${line%%|*}" = "$needle" ]; then
+            continue
+        fi
+        printf '%s\n' "$line" >> "$tmp"
+    done < "$CONFIG_FILE"
+
+    mv "$tmp" "$CONFIG_FILE"
+    chmod 600 "$CONFIG_FILE"
+}
+
+_write_connection() {
+    local a="$1" u="$2" h="$3" p="$4" f="$5" i="$6" j="$7"
+    _format_line "$a" "$u" "$h" "$p" "$f" "$i" "$j" >> "$CONFIG_FILE"
+    chmod 600 "$CONFIG_FILE"
+}
+
+_migrate_config_if_needed() {
+    [ ! -s "$CONFIG_FILE" ] && return 0
+
+    local line pipes needs_migrate=0
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -z "$line" ] && continue
+        case "$line" in \#*) continue ;; esac
+        pipes=$(awk -F'|' '{print NF-1}' <<< "$line")
+        # Legacy has 5 pipes (6 fields). New has 6 pipes (7 fields).
+        if [ "$pipes" -eq 5 ]; then
+            needs_migrate=1
+            break
+        fi
+    done < "$CONFIG_FILE"
+
+    [ "$needs_migrate" -eq 0 ] && return 0
+
+    local tmp a u h p pw f
+    tmp=$(mktemp) || return 1
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -z "$line" ] && continue
+        case "$line" in \#*) printf '%s\n' "$line" >> "$tmp"; continue ;; esac
+
+        pipes=$(awk -F'|' '{print NF-1}' <<< "$line")
+        if [ "$pipes" -eq 5 ]; then
+            IFS='|' read -r a u h p pw f <<< "$line"
+            if [ -n "$pw" ]; then
+                if _secret_set "$a" "$pw"; then
+                    :
+                else
+                    echo -e "${YELLOW}Warning: could not migrate password for '$a' to secret store; keeping secrets file fallback.${NC}" >&2
+                    _secret_file_set "$a" "$pw"
+                fi
+            fi
+            _format_line "$a" "$u" "$h" "$p" "$f" "" "" >> "$tmp"
+        elif [ "$pipes" -ge 6 ]; then
+            printf '%s\n' "$line" >> "$tmp"
+        else
+            # Partial / unknown — keep as-is
+            printf '%s\n' "$line" >> "$tmp"
+        fi
+    done < "$CONFIG_FILE"
+
+    mv "$tmp" "$CONFIG_FILE"
+    chmod 600 "$CONFIG_FILE"
+    echo -e "${GREEN}✓ Migrated config to secure format (passwords moved out of $CONFIG_FILE).${NC}" >&2
+}
+
+# ---------------------------------------------------------------------------
+# Secret storage
+# ---------------------------------------------------------------------------
+
+_secret_backend() {
+    if [[ "$OSTYPE" == darwin* ]] && command -v security >/dev/null 2>&1; then
+        echo "keychain"
+    elif command -v secret-tool >/dev/null 2>&1; then
+        echo "secret-tool"
+    elif command -v pass >/dev/null 2>&1; then
+        echo "pass"
+    else
+        echo "file"
+    fi
+}
+
+_secret_file_set() {
+    local account="$1" password="$2"
+    local tmp line
+    mkdir -p "$(dirname "$SECRETS_FILE")" 2>/dev/null || true
+    touch "$SECRETS_FILE"
+    chmod 600 "$SECRETS_FILE"
+    tmp=$(mktemp) || return 1
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -z "$line" ] && continue
+        [ "${line%%|*}" = "$account" ] && continue
+        printf '%s\n' "$line" >> "$tmp"
+    done < "$SECRETS_FILE"
+    if [ -n "$password" ]; then
+        # Store password after first |; allow | inside password via rest of line
+        printf '%s|%s\n' "$account" "$password" >> "$tmp"
+    fi
+    mv "$tmp" "$SECRETS_FILE"
+    chmod 600 "$SECRETS_FILE"
+}
+
+_secret_file_get() {
+    local account="$1"
+    local line
+    [ ! -f "$SECRETS_FILE" ] && return 1
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -z "$line" ] && continue
+        if [ "${line%%|*}" = "$account" ]; then
+            printf '%s' "${line#*|}"
+            return 0
+        fi
+    done < "$SECRETS_FILE"
+    return 1
+}
+
+_secret_file_delete() {
+    local account="$1"
+    [ ! -f "$SECRETS_FILE" ] && return 0
+    _secret_file_set "$account" ""
+}
+
+_secret_set() {
+    local account="$1" password="$2"
+    local backend
+    backend="$(_secret_backend)"
+
+    case "$backend" in
+        keychain)
+            security add-generic-password -U -s "$SECRET_SERVICE" -a "$account" -w "$password" >/dev/null 2>&1
+            ;;
+        secret-tool)
+            printf '%s' "$password" | secret-tool store --label="conn $account" service "$SECRET_SERVICE" account "$account"
+            ;;
+        pass)
+            printf '%s\n' "$password" | pass insert -m -f "conn/$account" >/dev/null 2>&1
+            ;;
+        file)
+            echo -e "${YELLOW}Note: no OS keychain found; storing password in $SECRETS_FILE (chmod 600).${NC}" >&2
+            _secret_file_set "$account" "$password"
+            ;;
+    esac
+}
+
+_secret_get() {
+    local account="$1"
+    local backend pw
+    backend="$(_secret_backend)"
+
+    case "$backend" in
+        keychain)
+            pw=$(security find-generic-password -s "$SECRET_SERVICE" -a "$account" -w 2>/dev/null) || return 1
+            printf '%s' "$pw"
+            return 0
+            ;;
+        secret-tool)
+            pw=$(secret-tool lookup service "$SECRET_SERVICE" account "$account" 2>/dev/null) || return 1
+            printf '%s' "$pw"
+            return 0
+            ;;
+        pass)
+            pw=$(pass show "conn/$account" 2>/dev/null | head -n1) || return 1
+            printf '%s' "$pw"
+            return 0
+            ;;
+        file)
+            _secret_file_get "$account"
+            ;;
+    esac
+}
+
+_secret_has() {
+    local pw
+    pw=$(_secret_get "$1" 2>/dev/null) || return 1
+    [ -n "$pw" ]
+}
+
+_secret_delete() {
+    local account="$1"
+    local backend
+    backend="$(_secret_backend)"
+
+    case "$backend" in
+        keychain)
+            security delete-generic-password -s "$SECRET_SERVICE" -a "$account" >/dev/null 2>&1 || true
+            ;;
+        secret-tool)
+            secret-tool clear service "$SECRET_SERVICE" account "$account" >/dev/null 2>&1 || true
+            ;;
+        pass)
+            pass rm -f "conn/$account" >/dev/null 2>&1 || true
+            ;;
+        file)
+            _secret_file_delete "$account"
+            ;;
+    esac
+    # Always clean file fallback too
+    _secret_file_delete "$account" 2>/dev/null || true
+}
+
+_copy_to_clipboard() {
+    local text="$1"
+    if [[ "$OSTYPE" == darwin* ]] && command -v pbcopy >/dev/null 2>&1; then
+        printf '%s' "$text" | pbcopy
+        return 0
+    elif command -v xclip >/dev/null 2>&1; then
+        printf '%s' "$text" | xclip -selection clipboard
+        return 0
+    elif command -v xsel >/dev/null 2>&1; then
+        printf '%s' "$text" | xsel --clipboard --input
+        return 0
+    elif command -v wl-copy >/dev/null 2>&1; then
+        printf '%s' "$text" | wl-copy
+        return 0
+    fi
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# SSH key helpers
+# ---------------------------------------------------------------------------
+
+_default_private_key() {
+    if [ -f "$HOME/.ssh/id_ed25519" ]; then
+        echo "$HOME/.ssh/id_ed25519"
+    elif [ -f "$HOME/.ssh/id_ecdsa" ]; then
+        echo "$HOME/.ssh/id_ecdsa"
+    elif [ -f "$HOME/.ssh/id_rsa" ]; then
+        echo "$HOME/.ssh/id_rsa"
+    else
+        echo ""
+    fi
+}
+
+_default_public_key() {
+    local priv
+    priv="$(_default_private_key)"
+    if [ -n "$priv" ] && [ -f "${priv}.pub" ]; then
+        echo "${priv}.pub"
+    else
+        echo ""
+    fi
+}
+
+_has_ssh_key() {
+    local k
+    k="$(_default_private_key)"
+    [ -n "$k" ]
+}
+
+_resolve_script_path() {
+    local path=""
+    if command -v realpath >/dev/null 2>&1; then
+        path="$(realpath "$0" 2>/dev/null)"
+    elif command -v greadlink >/dev/null 2>&1; then
+        path="$(greadlink -f "$0" 2>/dev/null)"
+    elif command -v readlink >/dev/null 2>&1 && readlink -f "$0" >/dev/null 2>&1; then
+        path="$(readlink -f "$0" 2>/dev/null)"
+    fi
+
+    if [ -z "$path" ] || [ ! -f "$path" ]; then
+        if [ -L "$0" ]; then
+            path="$(ls -l "$0" 2>/dev/null | awk '{print $NF}')"
+            if [ -n "$path" ] && [[ "$path" != /* ]]; then
+                path="$(cd "$(dirname "$0")" && pwd)/$path"
+            fi
+        else
+            path="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+        fi
+    fi
+
+    if [ -n "$path" ] && [ -f "$path" ]; then
+        printf '%s' "$path"
+        return 0
+    fi
+    return 1
+}
+
 _truncate_cell() {
     local s="$1"
     local max="$2"
@@ -56,7 +438,6 @@ _truncate_cell() {
     fi
 }
 
-# Repeat character (for table borders)
 _repeat_char() {
     local n="$1"
     local c="${2:--}"
@@ -68,9 +449,149 @@ _repeat_char() {
     printf '%s' "$out"
 }
 
-# Function to list all connections
+# ---------------------------------------------------------------------------
+# Help / completion
+# ---------------------------------------------------------------------------
+
+show_help() {
+    echo -e "${BLUE}=== SSH Connection Manager ===${NC}"
+    echo ""
+    echo "Usage: conn <command> [options]"
+    echo ""
+    echo "Available commands:"
+    echo "  to <alias>              - Connect to the server with the specified alias"
+    echo "  list                    - Show the list of all configured servers"
+    echo "  info <alias>            - Show detailed information about a connection"
+    echo "  add [alias user@host[:port]]"
+    echo "                          - Add a connection (wizard or one-shot)"
+    echo "  edit <alias>            - Edit an existing connection"
+    echo "  remove <alias>          - Remove an existing connection"
+    echo "  reset <alias>           - Remove SSH host key for the specified alias"
+    echo "  key <action>            - Manage SSH keys (public|private|create [--rsa])"
+    echo "  update                  - Update the script to the latest version from GitHub"
+    echo "  completion [bash|zsh]  - Print shell completion script"
+    echo "  help                    - Show this help message"
+    echo ""
+    echo "One-shot add options:"
+    echo "  conn add prod deploy@host:22 --folder /var/www --identity ~/.ssh/id_ed25519 --jump bastion"
+    echo ""
+    echo -e "${YELLOW}Tip:${NC} Connections file:"
+    echo "  $CONFIG_FILE"
+    echo -e "${YELLOW}Note:${NC} Passwords are stored in the OS secret store (Keychain / secret-tool / pass),"
+    echo "      never in the connections file. Copied to clipboard on connect (🔑)."
+    echo -e "${YELLOW}Note:${NC} Remote folders allow auto-cd on connect (📂)."
+    echo -e "${YELLOW}Note:${NC} Optional IdentityFile (🔐) and ProxyJump (↪) per connection."
+    echo ""
+}
+
+print_completion() {
+    local shell="${1:-}"
+    if [ -z "$shell" ]; then
+        if [ -n "$ZSH_VERSION" ]; then
+            shell="zsh"
+        else
+            shell="bash"
+        fi
+    fi
+
+    case "$shell" in
+        bash)
+            cat <<'EOF'
+_conn_completions() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    local cmd="${COMP_WORDS[1]}"
+    local aliases
+    aliases=$(conn list --aliases 2>/dev/null)
+
+    case "${COMP_CWORD}" in
+        1)
+            COMPREPLY=( $(compgen -W "to list info add edit remove reset key update completion help" -- "$cur") )
+            ;;
+        2)
+            case "$cmd" in
+                to|info|edit|remove|reset)
+                    COMPREPLY=( $(compgen -W "$aliases" -- "$cur") )
+                    ;;
+                key)
+                    COMPREPLY=( $(compgen -W "public private create" -- "$cur") )
+                    ;;
+                completion)
+                    COMPREPLY=( $(compgen -W "bash zsh" -- "$cur") )
+                    ;;
+            esac
+            ;;
+        3)
+            if [ "$cmd" = "key" ] && [ "${COMP_WORDS[2]}" = "create" ]; then
+                COMPREPLY=( $(compgen -W "--rsa" -- "$cur") )
+            fi
+            ;;
+    esac
+}
+complete -F _conn_completions conn
+EOF
+            ;;
+        zsh)
+            cat <<'EOF'
+#compdef conn
+_conn() {
+    local -a commands aliases key_actions
+    commands=(to list info add edit remove reset key update completion help)
+    key_actions=(public private create)
+    aliases=(${(f)"$(conn list --aliases 2>/dev/null)"})
+
+    case $CURRENT in
+        2)
+            _describe 'command' commands
+            ;;
+        3)
+            case ${words[2]} in
+                to|info|edit|remove|reset)
+                    _describe 'alias' aliases
+                    ;;
+                key)
+                    _describe 'action' key_actions
+                    ;;
+                completion)
+                    _values 'shell' bash zsh
+                    ;;
+            esac
+            ;;
+        4)
+            if [[ ${words[2]} == key && ${words[3]} == create ]]; then
+                _values 'option' --rsa
+            fi
+            ;;
+    esac
+}
+compdef _conn conn
+EOF
+            ;;
+        *)
+            echo -e "${RED}Error: unsupported shell '$shell' (use bash or zsh)${NC}" >&2
+            return 1
+            ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
 list_connections() {
     init_config
+
+    if [ "${1:-}" = "--aliases" ]; then
+        if [ ! -s "$CONFIG_FILE" ]; then
+            return 0
+        fi
+        local line
+        while IFS= read -r line || [ -n "$line" ]; do
+            [ -z "$line" ] && continue
+            case "$line" in \#*) continue ;; esac
+            printf '%s\n' "${line%%|*}"
+        done < <(sort "$CONFIG_FILE")
+        return 0
+    fi
 
     if [ ! -s "$CONFIG_FILE" ]; then
         echo -e "${YELLOW}No connections configured.${NC}"
@@ -78,16 +599,10 @@ list_connections() {
         return
     fi
 
-    # Column widths (minimums; expanded if content is wider)
-    local W_ALIAS=14
-    local W_USER=8
-    local W_HOST=16
-    local W_PORT=4
-    local W_FOLDER=20
-    # Emoji in Notes can be 2 cells wide in terminals; keep a bit of slack
-    local W_NOTES=10
+    local W_ALIAS=14 W_USER=8 W_HOST=16 W_PORT=4 W_FOLDER=20 W_NOTES=12
+    local _a _u _h _p _f _i _j
 
-    while IFS='|' read -r _a _u _h _p _pw _f; do
+    while IFS='|' read -r _a _u _h _p _f _i _j; do
         [ -z "$_a" ] && continue
         [ ${#_a} -gt "$W_ALIAS" ] && W_ALIAS=${#_a}
         [ ${#_u} -gt "$W_USER" ] && W_USER=${#_u}
@@ -98,21 +613,18 @@ list_connections() {
         fi
     done < <(sort "$CONFIG_FILE")
 
-    # Sensible caps so very long lines do not break narrow terminals
     [ "$W_ALIAS" -gt 24 ] && W_ALIAS=24
     [ "$W_USER" -gt 20 ] && W_USER=20
     [ "$W_HOST" -gt 36 ] && W_HOST=36
     [ "$W_PORT" -gt 5 ] && W_PORT=5
     [ "$W_FOLDER" -gt 32 ] && W_FOLDER=32
 
-    # Must match ┌─────┬...┐ line length: 13 + sum of widths (┌ + 5 + 6×┬ + ┐ + column dashes)
     local border_len=$((13 + W_ALIAS + W_USER + W_HOST + W_PORT + W_FOLDER + W_NOTES))
     local title_bar
     title_bar=$(_repeat_char $((border_len - 2)) "═")
 
     echo ""
     echo -e "${BLUE}╔${title_bar}╗${NC}"
-    # Title text padded to match inner width (between ║ and ║) = border_len - 2
     printf "${BLUE}║ %-$((border_len - 4))s ║${NC}\n" " SSH SERVERS LIST"
     echo -e "${BLUE}╚${title_bar}╝${NC}"
     echo ""
@@ -130,30 +642,31 @@ list_connections() {
     bot="└$(_repeat_char 5 '─')┴$(_repeat_char "$W_ALIAS" '─')┴$(_repeat_char "$W_USER" '─')┴$(_repeat_char "$W_HOST" '─')┴$(_repeat_char "$W_PORT" '─')┴$(_repeat_char "$W_FOLDER" '─')┴$(_repeat_char "$W_NOTES" '─')┘"
 
     echo -e "${BLUE}${top}${NC}"
-    # No extra spaces between │ and fields: inner width must match ─ count exactly
     printf "${BLUE}│${NC}%5s${BLUE}│${NC}%-${W_ALIAS}s${BLUE}│${NC}%-${W_USER}s${BLUE}│${NC}%-${W_HOST}s${BLUE}│${NC}%-${W_PORT}s${BLUE}│${NC}%-${W_FOLDER}s${BLUE}│${NC}%-${W_NOTES}s${BLUE}│${NC}\n" \
         "#" "$h_alias" "$h_user" "$h_host" "$h_port" "$h_folder" "Notes"
     echo -e "${BLUE}${mid}${NC}"
 
-    local idx=0
-    while IFS='|' read -r alias user host port password folder; do
-        [ -z "$alias" ] && continue
+    local idx=0 line notes ca cu ch cp cf
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -z "$line" ] && continue
+        case "$line" in \#*) continue ;; esac
+        _parse_line "$line"
         idx=$((idx + 1))
 
-        local notes=""
-        [ -n "$password" ] && notes+="🔑"
-        [ -n "$folder" ] && notes+="📂"
+        notes=""
+        _secret_has "$_c_alias" 2>/dev/null && notes+="🔑"
+        [ -n "$_c_folder" ] && notes+="📂"
+        [ -n "$_c_identity" ] && notes+="🔐"
+        [ -n "$_c_jump" ] && notes+="↪"
         [ -z "$notes" ] && notes="-"
 
-        local ca cu ch cp cf
-        ca=$(_truncate_cell "$alias" "$W_ALIAS")
-        cu=$(_truncate_cell "$user" "$W_USER")
-        ch=$(_truncate_cell "$host" "$W_HOST")
-        cp=$(_truncate_cell "$port" "$W_PORT")
-        if [ -n "$folder" ]; then
-            cf=$(_truncate_cell "$folder" "$W_FOLDER")
+        ca=$(_truncate_cell "$_c_alias" "$W_ALIAS")
+        cu=$(_truncate_cell "$_c_user" "$W_USER")
+        ch=$(_truncate_cell "$_c_host" "$W_HOST")
+        cp=$(_truncate_cell "$_c_port" "$W_PORT")
+        if [ -n "$_c_folder" ]; then
+            cf=$(_truncate_cell "$_c_folder" "$W_FOLDER")
         else
-            # ASCII '-' so printf column widths match box lines (bash 3.2 counts bytes for %s)
             cf=$(_truncate_cell "-" "$W_FOLDER")
         fi
 
@@ -165,293 +678,421 @@ list_connections() {
     echo ""
     echo -e "${BLUE}$(_repeat_char "$border_len" "─")${NC}"
     echo -e "  ${YELLOW}💡 Tip:${NC} Use ${GREEN}conn to <alias>${NC} to connect"
-    echo -e "  ${YELLOW}🔑${NC} saved password   ${YELLOW}📂${NC} remote folder"
+    echo -e "  ${YELLOW}🔑${NC} saved password   ${YELLOW}📂${NC} remote folder   ${YELLOW}🔐${NC} identity file   ${YELLOW}↪${NC} proxy jump"
     echo ""
 }
 
-# Function to show connection info
 show_connection_info() {
     init_config
 
-    if [ -z "$1" ]; then
+    local conn_alias="${1:-}"
+    if [ -z "$conn_alias" ]; then
         echo -e "${RED}Error: please specify an alias!${NC}"
         echo "Usage: conn info <alias>"
         return 1
     fi
 
-    alias="$1"
-
-    # Search for the connection
-    connection=$(grep "^$alias|" "$CONFIG_FILE" 2>/dev/null)
-
-    if [ -z "$connection" ]; then
-        echo -e "${RED}Error: alias '$alias' does not exist!${NC}"
+    if ! _get_connection "$conn_alias"; then
+        echo -e "${RED}Error: alias '$conn_alias' does not exist!${NC}"
         echo -e "${YELLOW}Use 'conn list' to see available connections.${NC}"
         return 1
     fi
-
-    # Extract details
-    IFS='|' read -r al user host port password folder <<< "$connection"
 
     echo ""
     echo -e "${BLUE}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${BLUE}║                          CONNECTION INFO                                   ║${NC}"
     echo -e "${BLUE}╚════════════════════════════════════════════════════════════════════════════╝${NC}"
     echo ""
-    echo -e "${GREEN}Alias:${NC}      $al"
-    echo -e "${GREEN}User:${NC}       $user"
-    echo -e "${GREEN}Host:${NC}       $host"
-    echo -e "${GREEN}Port:${NC}       $port"
-    echo -e "${GREEN}Connection:${NC} $user@$host:$port"
+    echo -e "${GREEN}Alias:${NC}      $_c_alias"
+    echo -e "${GREEN}User:${NC}       $_c_user"
+    echo -e "${GREEN}Host:${NC}       $_c_host"
+    echo -e "${GREEN}Port:${NC}       $_c_port"
+    echo -e "${GREEN}Connection:${NC} $_c_user@$_c_host:$_c_port"
 
-    if [ -n "$password" ]; then
-        echo -e "${GREEN}Password:${NC}   ${RED}$password${NC} ${YELLOW}(⚠️ visible in plain text)${NC}"
+    if _secret_has "$_c_alias" 2>/dev/null; then
+        echo -e "${GREEN}Password:${NC}   ${YELLOW}Saved in secret store (not shown)${NC}"
     else
         echo -e "${GREEN}Password:${NC}   ${YELLOW}Not saved${NC}"
     fi
 
-    if [ -n "$folder" ]; then
-        echo -e "${GREEN}Folder:${NC}     $folder"
+    if [ -n "$_c_folder" ]; then
+        echo -e "${GREEN}Folder:${NC}     $_c_folder"
     else
         echo -e "${GREEN}Folder:${NC}     ${YELLOW}Not set${NC}"
     fi
 
+    if [ -n "$_c_identity" ]; then
+        echo -e "${GREEN}Identity:${NC}   $_c_identity"
+    else
+        echo -e "${GREEN}Identity:${NC}   ${YELLOW}Default SSH key${NC}"
+    fi
+
+    if [ -n "$_c_jump" ]; then
+        echo -e "${GREEN}ProxyJump:${NC}  $_c_jump"
+    else
+        echo -e "${GREEN}ProxyJump:${NC}  ${YELLOW}Not set${NC}"
+    fi
+
     echo ""
     echo -e "${BLUE}────────────────────────────────────────────────────────────────────────────${NC}"
-    echo -e "  ${YELLOW}💡 Tip:${NC} Use ${GREEN}conn to $alias${NC} to connect"
+    echo -e "  ${YELLOW}💡 Tip:${NC} Use ${GREEN}conn to $conn_alias${NC} to connect"
     echo ""
 }
 
-# Function to add a new connection
+_parse_userhost() {
+    # Sets: _uh_user _uh_host _uh_port from user@host[:port]
+    local spec="$1"
+    _uh_user=""
+    _uh_host=""
+    _uh_port="22"
+
+    if [[ "$spec" != *@* ]]; then
+        echo -e "${RED}Error: expected user@host[:port], got '$spec'${NC}" >&2
+        return 1
+    fi
+
+    _uh_user="${spec%%@*}"
+    local rest="${spec#*@}"
+
+    if [[ "$rest" == *:* ]] && [[ "$rest" != \[*\]* ]]; then
+        # host:port (simple; IPv6 bracket form: [addr]:port)
+        _uh_host="${rest%:*}"
+        _uh_port="${rest##*:}"
+    elif [[ "$rest" == \[*\]:* ]]; then
+        _uh_host="${rest%:*}"
+        _uh_port="${rest##*:}"
+    else
+        _uh_host="$rest"
+    fi
+
+    if [ -z "$_uh_user" ] || [ -z "$_uh_host" ]; then
+        echo -e "${RED}Error: invalid user@host[:port] '$spec'${NC}" >&2
+        return 1
+    fi
+    return 0
+}
+
 add_connection() {
     init_config
-    
-    echo -e "${BLUE}=== Add New SSH Connection ===${NC}"
-    echo ""
-    
-    # Request alias
-    read -p "Type alias: " alias
-    if [ -z "$alias" ]; then
-        echo -e "${RED}Error: alias cannot be empty!${NC}"
+
+    local conn_alias="" user="" host="" port="22" folder="" identity="" jump="" password=""
+
+    # One-shot: conn add alias user@host[:port] [--folder ...] [--identity ...] [--jump ...] [--password]
+    if [ $# -ge 2 ] && [[ "$2" == *@* ]]; then
+        conn_alias="$1"
+        shift
+        if ! _parse_userhost "$1"; then
+            return 1
+        fi
+        shift
+        user="$_uh_user"
+        host="$_uh_host"
+        port="$_uh_port"
+
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --folder|-f)
+                    folder="${2:-}"
+                    shift 2
+                    ;;
+                --identity|-i)
+                    identity="${2:-}"
+                    shift 2
+                    ;;
+                --jump|-J)
+                    jump="${2:-}"
+                    shift 2
+                    ;;
+                --password|-p)
+                    if [ -n "${2:-}" ] && [[ "${2:-}" != -* ]]; then
+                        password="$2"
+                        shift 2
+                    else
+                        read -s -p "Password: " password
+                        echo ""
+                        shift
+                    fi
+                    ;;
+                *)
+                    echo -e "${RED}Error: unknown option '$1'${NC}"
+                    echo "Usage: conn add <alias> <user@host[:port]> [--folder PATH] [--identity FILE] [--jump HOST] [--password [PASS]]"
+                    return 1
+                    ;;
+            esac
+        done
+    else
+        echo -e "${BLUE}=== Add New SSH Connection ===${NC}"
+        echo ""
+
+        read -p "Type alias: " conn_alias
+        if ! _validate_alias "$conn_alias"; then
+            return 1
+        fi
+
+        if _connection_exists "$conn_alias"; then
+            echo -e "${RED}Error: alias '$conn_alias' already exists!${NC}"
+            return 1
+        fi
+
+        read -p "Type user (default: root): " user
+        user=${user:-root}
+
+        read -p "Type host: " host
+        if [ -z "$host" ]; then
+            echo -e "${RED}Error: host cannot be empty!${NC}"
+            return 1
+        fi
+
+        read -p "Type port (default: 22): " port
+        port=${port:-22}
+
+        echo ""
+        echo -e "${YELLOW}Password (optional — stored in secret store, copied to clipboard on connect):${NC}"
+        read -s -p "Type password (optional): " password
+        echo ""
+
+        echo ""
+        read -p "Type remote folder (optional): " folder
+
+        read -p "Identity file (optional, e.g. ~/.ssh/id_ed25519): " identity
+        read -p "ProxyJump host (optional): " jump
+    fi
+
+    if ! _validate_alias "$conn_alias"; then
         return 1
     fi
-    
-    # Check if alias already exists
-    if grep -q "^$alias|" "$CONFIG_FILE" 2>/dev/null; then
-        echo -e "${RED}Error: alias '$alias' already exists!${NC}"
+    if ! _validate_field "user" "$user" || ! _validate_field "host" "$host" \
+        || ! _validate_field "folder" "$folder" || ! _validate_field "identity" "$identity" \
+        || ! _validate_field "proxyjump" "$jump"; then
         return 1
     fi
-    
-    # Request user (default: root)
-    read -p "Type user (default: root): " user
-    user=${user:-root}
-    
-    # Request host
-    read -p "Type host: " host
-    if [ -z "$host" ]; then
-        echo -e "${RED}Error: host cannot be empty!${NC}"
+    if ! _validate_port "$port"; then
         return 1
     fi
-    
-    # Request port (default: 22)
-    read -p "Type port (default: 22): " port
-    port=${port:-22}
-    
-    # Request password (optional)
-    echo ""
-    echo -e "${YELLOW}Password (optional - will be copied to clipboard during connection):${NC}"
-    read -s -p "Type password (optional): " password
-    echo ""
-    
-    # Request remote folder (optional)
-    echo ""
-    read -p "Type remote folder (optional): " folder
-    
-    # Save the connection
-    echo "$alias|$user|$host|$port|$password|$folder" >> "$CONFIG_FILE"
-    
-    echo ""
-    echo -e "${GREEN}✓ Connection '$alias' added successfully!${NC}"
-    echo -e "  ${user}@${host}:${port}"
-    if [ -n "$folder" ]; then
-        echo -e "  ${YELLOW}(will open in $folder)${NC}"
+
+    if _connection_exists "$conn_alias"; then
+        echo -e "${RED}Error: alias '$conn_alias' already exists!${NC}"
+        return 1
     fi
+
+    # Expand ~ in identity
+    if [ -n "$identity" ]; then
+        identity="${identity/#\~/$HOME}"
+    fi
+
     if [ -n "$password" ]; then
-        echo -e "  ${YELLOW}(password will be copied to clipboard on connect)${NC}"
+        if ! _secret_set "$conn_alias" "$password"; then
+            echo -e "${RED}Error: failed to store password in secret store!${NC}"
+            return 1
+        fi
     fi
+
+    _write_connection "$conn_alias" "$user" "$host" "$port" "$folder" "$identity" "$jump"
+
+    echo ""
+    echo -e "${GREEN}✓ Connection '$conn_alias' added successfully!${NC}"
+    echo -e "  ${user}@${host}:${port}"
+    [ -n "$folder" ] && echo -e "  ${YELLOW}(will open in $folder)${NC}"
+    [ -n "$identity" ] && echo -e "  ${YELLOW}(identity: $identity)${NC}"
+    [ -n "$jump" ] && echo -e "  ${YELLOW}(proxyjump: $jump)${NC}"
+    [ -n "$password" ] && echo -e "  ${YELLOW}(password stored in $(_secret_backend))${NC}"
     echo ""
 }
 
-# Function to edit an existing connection
 edit_connection() {
     init_config
-    
-    if [ -z "$1" ]; then
+
+    local old_alias="${1:-}"
+    if [ -z "$old_alias" ]; then
         echo -e "${RED}Error: please specify an alias!${NC}"
         echo "Usage: conn edit <alias>"
         return 1
     fi
-    
-    old_alias="$1"
-    
-    # Check if alias exists
-    if ! grep -q "^$old_alias|" "$CONFIG_FILE" 2>/dev/null; then
+
+    if ! _get_connection "$old_alias"; then
         echo -e "${RED}Error: alias '$old_alias' does not exist!${NC}"
         return 1
     fi
-    
-    # Get current connection details
-    connection=$(grep "^$old_alias|" "$CONFIG_FILE")
-    IFS='|' read -r current_alias current_user current_host current_port current_password current_folder <<< "$connection"
-    
+
+    local current_alias="$_c_alias"
+    local current_user="$_c_user"
+    local current_host="$_c_host"
+    local current_port="$_c_port"
+    local current_folder="$_c_folder"
+    local current_identity="$_c_identity"
+    local current_jump="$_c_jump"
+
     echo -e "${BLUE}=== Edit SSH Connection ===${NC}"
     echo ""
     echo -e "${YELLOW}Press Enter to keep the current value${NC}"
     echo ""
-    
-    # Request new alias
+
+    local new_alias new_user new_host new_port new_password new_folder new_identity new_jump
+
     read -p "Alias ($current_alias): " new_alias
     new_alias=${new_alias:-$current_alias}
-    
-    # Check if new alias already exists (and it's different from the current one)
-    if [ "$new_alias" != "$current_alias" ] && grep -q "^$new_alias|" "$CONFIG_FILE" 2>/dev/null; then
-        echo -e "${RED}Error: alias '$new_alias' already exists!${NC}"
-        return 1
+
+    if [ "$new_alias" != "$current_alias" ]; then
+        if ! _validate_alias "$new_alias"; then
+            return 1
+        fi
+        if _connection_exists "$new_alias"; then
+            echo -e "${RED}Error: alias '$new_alias' already exists!${NC}"
+            return 1
+        fi
     fi
-    
-    # Request new user
+
     read -p "User ($current_user): " new_user
     new_user=${new_user:-$current_user}
-    
-    # Request new host
+
     read -p "Host ($current_host): " new_host
     new_host=${new_host:-$current_host}
-    
-    # Request new port
+
     read -p "Port ($current_port): " new_port
     new_port=${new_port:-$current_port}
-    
-    # Request new password
+    if ! _validate_port "$new_port"; then
+        return 1
+    fi
+
     echo ""
-    if [ -n "$current_password" ]; then
-        echo -e "${YELLOW}Password (current: ******, press Enter to keep, type 'REMOVE' to delete):${NC}"
+    if _secret_has "$current_alias" 2>/dev/null; then
+        echo -e "${YELLOW}Password (saved in secret store; Enter=keep, 'REMOVE'=delete):${NC}"
     else
-        echo -e "${YELLOW}Password (optional - will be copied to clipboard during connection):${NC}"
+        echo -e "${YELLOW}Password (optional — stored in secret store):${NC}"
     fi
     read -s -p "Type password: " new_password
     echo ""
-    
-    # Handle password
-    if [ -z "$new_password" ]; then
-        new_password="$current_password"
-    elif [ "$new_password" = "REMOVE" ]; then
-        new_password=""
-    fi
-    
-    # Request new folder
+
     echo ""
     if [ -n "$current_folder" ]; then
-        echo -e "${YELLOW}Remote folder (current: $current_folder, press Enter to keep, type 'REMOVE' to delete):${NC}"
+        echo -e "${YELLOW}Remote folder (current: $current_folder, Enter=keep, 'REMOVE'=delete):${NC}"
     else
-        echo -e "${YELLOW}Remote folder (optional - will cd into this folder on connect):${NC}"
+        echo -e "${YELLOW}Remote folder (optional):${NC}"
     fi
     read -p "Type remote folder: " new_folder
-    
-    # Handle folder
     if [ -z "$new_folder" ]; then
         new_folder="$current_folder"
     elif [ "$new_folder" = "REMOVE" ]; then
         new_folder=""
     fi
-    
-    # Remove old connection
-    sed -i.bak "/^$old_alias|/d" "$CONFIG_FILE"
-    rm -f "${CONFIG_FILE}.bak"
-    
-    # Add updated connection
-    echo "$new_alias|$new_user|$new_host|$new_port|$new_password|$new_folder" >> "$CONFIG_FILE"
-    
+
+    if [ -n "$current_identity" ]; then
+        echo -e "${YELLOW}Identity file (current: $current_identity, Enter=keep, 'REMOVE'=delete):${NC}"
+    else
+        echo -e "${YELLOW}Identity file (optional):${NC}"
+    fi
+    read -p "Type identity file: " new_identity
+    if [ -z "$new_identity" ]; then
+        new_identity="$current_identity"
+    elif [ "$new_identity" = "REMOVE" ]; then
+        new_identity=""
+    fi
+    if [ -n "$new_identity" ]; then
+        new_identity="${new_identity/#\~/$HOME}"
+    fi
+
+    if [ -n "$current_jump" ]; then
+        echo -e "${YELLOW}ProxyJump (current: $current_jump, Enter=keep, 'REMOVE'=delete):${NC}"
+    else
+        echo -e "${YELLOW}ProxyJump (optional):${NC}"
+    fi
+    read -p "Type ProxyJump host: " new_jump
+    if [ -z "$new_jump" ]; then
+        new_jump="$current_jump"
+    elif [ "$new_jump" = "REMOVE" ]; then
+        new_jump=""
+    fi
+
+    if ! _validate_field "user" "$new_user" || ! _validate_field "host" "$new_host" \
+        || ! _validate_field "folder" "$new_folder" || ! _validate_field "identity" "$new_identity" \
+        || ! _validate_field "proxyjump" "$new_jump"; then
+        return 1
+    fi
+
+    _delete_connection_line "$old_alias"
+    _write_connection "$new_alias" "$new_user" "$new_host" "$new_port" "$new_folder" "$new_identity" "$new_jump"
+
+    # Password / secret store
+    if [ "$new_password" = "REMOVE" ]; then
+        _secret_delete "$current_alias"
+        [ "$new_alias" != "$current_alias" ] && _secret_delete "$new_alias"
+    elif [ -n "$new_password" ]; then
+        [ "$new_alias" != "$current_alias" ] && _secret_delete "$current_alias"
+        _secret_set "$new_alias" "$new_password"
+    elif [ "$new_alias" != "$current_alias" ]; then
+        # Rename secret entry
+        local old_pw
+        if old_pw=$(_secret_get "$current_alias" 2>/dev/null); then
+            _secret_set "$new_alias" "$old_pw"
+            _secret_delete "$current_alias"
+        fi
+    fi
+
     echo ""
     echo -e "${GREEN}✓ Connection updated successfully!${NC}"
     if [ "$new_alias" != "$current_alias" ]; then
         echo -e "  ${YELLOW}Alias changed: $current_alias → $new_alias${NC}"
     fi
     echo -e "  ${new_user}@${new_host}:${new_port}"
-    if [ -n "$new_folder" ]; then
-        echo -e "  ${YELLOW}(will open in $new_folder)${NC}"
-    fi
-    if [ -n "$new_password" ]; then
-        echo -e "  ${YELLOW}(password will be copied to clipboard on connect)${NC}"
-    fi
+    [ -n "$new_folder" ] && echo -e "  ${YELLOW}(will open in $new_folder)${NC}"
+    [ -n "$new_identity" ] && echo -e "  ${YELLOW}(identity: $new_identity)${NC}"
+    [ -n "$new_jump" ] && echo -e "  ${YELLOW}(proxyjump: $new_jump)${NC}"
     echo ""
 }
 
-# Function to remove a connection
 remove_connection() {
     init_config
-    
-    if [ -z "$1" ]; then
+
+    local conn_alias="${1:-}"
+    if [ -z "$conn_alias" ]; then
         echo -e "${RED}Error: please specify an alias!${NC}"
         echo "Usage: conn remove <alias>"
         return 1
     fi
-    
-    alias="$1"
-    
-    # Check if alias exists
-    if ! grep -q "^$alias|" "$CONFIG_FILE" 2>/dev/null; then
-        echo -e "${RED}Error: alias '$alias' does not exist!${NC}"
+
+    if ! _get_connection "$conn_alias"; then
+        echo -e "${RED}Error: alias '$conn_alias' does not exist!${NC}"
         return 1
     fi
-    
-    # Show connection details
-    connection=$(grep "^$alias|" "$CONFIG_FILE")
-    IFS='|' read -r al user host port password folder <<< "$connection"
-    
+
     echo -e "${YELLOW}You are about to remove:${NC}"
-    echo -e "  Alias: ${GREEN}$al${NC}"
-    echo -e "  Connection: ${user}@${host}:${port}"
-    if [ -n "$folder" ]; then
-        echo -e "  ${YELLOW}(remote folder: $folder 📂)${NC}"
-    fi
-    if [ -n "$password" ]; then
-        echo -e "  ${YELLOW}(with saved password 🔑)${NC}"
-    fi
+    echo -e "  Alias: ${GREEN}$_c_alias${NC}"
+    echo -e "  Connection: ${_c_user}@${_c_host}:${_c_port}"
+    [ -n "$_c_folder" ] && echo -e "  ${YELLOW}(remote folder: $_c_folder 📂)${NC}"
+    [ -n "$_c_identity" ] && echo -e "  ${YELLOW}(identity: $_c_identity 🔐)${NC}"
+    [ -n "$_c_jump" ] && echo -e "  ${YELLOW}(proxyjump: $_c_jump ↪)${NC}"
+    _secret_has "$conn_alias" 2>/dev/null && echo -e "  ${YELLOW}(with saved password 🔑)${NC}"
     echo ""
-    
-    # Ask for confirmation
+
+    local confirm
     read -p "Are you sure you want to proceed? (y/N): " confirm
-    
+
     if [[ "$confirm" =~ ^[yY]$ ]]; then
-        # Remove the line from file
-        sed -i.bak "/^$alias|/d" "$CONFIG_FILE"
-        rm -f "${CONFIG_FILE}.bak"
-        echo -e "${GREEN}✓ Connection '$alias' removed successfully!${NC}"
+        _delete_connection_line "$conn_alias"
+        _secret_delete "$conn_alias"
+        echo -e "${GREEN}✓ Connection '$conn_alias' removed successfully!${NC}"
     else
         echo -e "${YELLOW}Operation cancelled.${NC}"
     fi
 }
 
-# Function to connect to a server
 connect_to() {
     init_config
-    
-    if [ -z "$1" ]; then
+
+    local conn_alias="${1:-}"
+    if [ -z "$conn_alias" ]; then
         echo -e "${RED}Error: please specify an alias!${NC}"
         echo "Usage: conn to <alias>"
         return 1
     fi
-    
-    alias="$1"
-    
-    # Check if SSH key exists
-    SSH_KEY_PATH="$HOME/.ssh/id_rsa"
-    if [ ! -f "$SSH_KEY_PATH" ]; then
+
+    if ! _has_ssh_key; then
         echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         echo -e "${YELLOW}⚠  SSH key not found!${NC}"
-        echo -e "${YELLOW}   Run 'conn key create' to generate a new key pair.${NC}"
+        echo -e "${YELLOW}   Run 'conn key create' to generate a new ed25519 key pair.${NC}"
         echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         echo ""
+        local confirm
         read -p "Do you want to continue anyway? (y/N): " confirm
         if [[ ! "$confirm" =~ ^[yY]$ ]]; then
             echo -e "${YELLOW}Connection cancelled.${NC}"
@@ -459,242 +1100,265 @@ connect_to() {
         fi
         echo ""
     fi
-    
-    # Check for updates
+
     check_for_updates
-    
-    # Search for the connection
-    connection=$(grep "^$alias|" "$CONFIG_FILE" 2>/dev/null)
-    
-    if [ -z "$connection" ]; then
-        echo -e "${RED}Error: alias '$alias' does not exist!${NC}"
+
+    if ! _get_connection "$conn_alias"; then
+        echo -e "${RED}Error: alias '$conn_alias' does not exist!${NC}"
         echo -e "${YELLOW}Use 'conn list' to see available connections.${NC}"
         return 1
     fi
-    
-    # Extract details
-    IFS='|' read -r al user host port password folder <<< "$connection"
-    
-    echo -e "${GREEN}Connecting to $alias...${NC}"
-    echo -e "  ${user}@${host}:${port}"
-    if [ -n "$folder" ]; then
-        echo -e "  ${YELLOW}📂 $folder${NC}"
-    fi
-    
-    # Copy password to clipboard if present
-    if [ -n "$password" ]; then
-        # Detect OS and copy to clipboard
-        if [[ "$OSTYPE" == "darwin"* ]]; then
-            # macOS
-            echo -n "$password" | pbcopy
-            echo -e "  ${GREEN}✓ Password copied to clipboard!${NC}"
-        elif command -v xclip &> /dev/null; then
-            # Linux with xclip
-            echo -n "$password" | xclip -selection clipboard
-            echo -e "  ${GREEN}✓ Password copied to clipboard!${NC}"
-        elif command -v xsel &> /dev/null; then
-            # Linux with xsel
-            echo -n "$password" | xsel --clipboard --input
-            echo -e "  ${GREEN}✓ Password copied to clipboard!${NC}"
-        else
-            echo -e "  ${YELLOW}⚠  Cannot copy to clipboard (install xclip or xsel)${NC}"
+
+    echo -e "${GREEN}Connecting to $conn_alias...${NC}"
+    echo -e "  ${_c_user}@${_c_host}:${_c_port}"
+    [ -n "$_c_folder" ] && echo -e "  ${YELLOW}📂 $_c_folder${NC}"
+    [ -n "$_c_identity" ] && echo -e "  ${YELLOW}🔐 $_c_identity${NC}"
+    [ -n "$_c_jump" ] && echo -e "  ${YELLOW}↪ $_c_jump${NC}"
+
+    local password
+    if password=$(_secret_get "$conn_alias" 2>/dev/null); then
+        if [ -n "$password" ]; then
+            if _copy_to_clipboard "$password"; then
+                echo -e "  ${GREEN}✓ Password copied to clipboard!${NC}"
+            else
+                echo -e "  ${YELLOW}⚠  Cannot copy to clipboard (install pbcopy/xclip/xsel/wl-copy)${NC}"
+            fi
         fi
     fi
-    
+
     echo ""
-    
-    # Execute SSH connection
-    if [ -n "$folder" ]; then
-        ssh "$user@$host" -p "$port" -t "cd \"$folder\" && exec \$SHELL -l"
+
+    local -a ssh_cmd
+    ssh_cmd=(ssh -p "$_c_port")
+    [ -n "$_c_identity" ] && ssh_cmd+=(-i "$_c_identity")
+    [ -n "$_c_jump" ] && ssh_cmd+=(-J "$_c_jump")
+
+    if [ -n "$_c_folder" ]; then
+        ssh_cmd+=(-t "${_c_user}@${_c_host}" "cd \"$_c_folder\" && exec \$SHELL -l")
     else
-        ssh "$user@$host" -p "$port"
+        ssh_cmd+=("${_c_user}@${_c_host}")
     fi
+
+    "${ssh_cmd[@]}"
 }
 
-# Function to reset SSH keys
 reset_host() {
     init_config
-    
-    if [ -z "$1" ]; then
+
+    local conn_alias="${1:-}"
+    if [ -z "$conn_alias" ]; then
         echo -e "${RED}Error: please specify an alias!${NC}"
         echo "Usage: conn reset <alias>"
         return 1
     fi
-    
-    alias="$1"
-    
-    # Search for the connection
-    connection=$(grep "^$alias|" "$CONFIG_FILE" 2>/dev/null)
-    
-    if [ -z "$connection" ]; then
-        echo -e "${RED}Error: alias '$alias' does not exist!${NC}"
+
+    if ! _get_connection "$conn_alias"; then
+        echo -e "${RED}Error: alias '$conn_alias' does not exist!${NC}"
         return 1
     fi
-    
-    # Extract host
-    IFS='|' read -r al user host port password folder <<< "$connection"
-    
-    echo -e "${YELLOW}Resetting SSH keys for:${NC}"
-    echo -e "  Host: ${host}"
-    echo -e "  Port: ${port}"
+
+    echo -e "${YELLOW}Resetting SSH host key for:${NC}"
+    echo -e "  Host: ${_c_host}"
+    echo -e "  Port: ${_c_port}"
     echo ""
-    
-    # Execute ssh-keygen -R
-    if [ "$port" == "22" ]; then
-        ssh-keygen -R "$host"
+
+    if [ "$_c_port" = "22" ]; then
+        ssh-keygen -R "$_c_host"
     else
-        ssh-keygen -R "[$host]:$port"
+        ssh-keygen -R "[${_c_host}]:${_c_port}"
     fi
-    
+
     echo ""
-    echo -e "${GREEN}✓ SSH keys reset for '$alias'!${NC}"
+    echo -e "${GREEN}✓ SSH host key reset for '$conn_alias'!${NC}"
 }
 
-# Function to manage SSH keys
 manage_keys() {
-    SSH_KEY_PATH="$HOME/.ssh/id_rsa"
-    SSH_PUB_KEY_PATH="$HOME/.ssh/id_rsa.pub"
-    
-    if [ -z "$1" ]; then
+    local action="${1:-}"
+    shift || true
+    local key_path pub_path
+    local key_type="ed25519"
+    local new_key comment
+    local confirm
+
+    key_path="$(_default_private_key)"
+    if [ -z "$key_path" ]; then
+        key_path="$HOME/.ssh/id_ed25519"
+    fi
+    pub_path="${key_path}.pub"
+
+    if [ -z "$action" ]; then
         echo -e "${RED}Error: please specify an action!${NC}"
-        echo "Usage: conn key <public|private|create>"
+        echo "Usage: conn key <public|private|create [--rsa]>"
         return 1
     fi
-    
-    action="$1"
-    
+
     case "$action" in
         public)
-            if [ ! -f "$SSH_PUB_KEY_PATH" ]; then
+            pub_path="$(_default_public_key)"
+            if [ -z "$pub_path" ] || [ ! -f "$pub_path" ]; then
                 echo -e "${RED}Error: SSH public key not found!${NC}"
                 echo -e "${YELLOW}Run 'conn key create' to generate a new key pair.${NC}"
                 return 1
             fi
-            
             echo -e "${BLUE}=== SSH Public Key ===${NC}"
             echo ""
-            cat "$SSH_PUB_KEY_PATH"
+            cat "$pub_path"
             echo ""
-            echo -e "${YELLOW}Path:${NC} $SSH_PUB_KEY_PATH"
+            echo -e "${YELLOW}Path:${NC} $pub_path"
             echo ""
             ;;
-            
+
         private)
-            if [ ! -f "$SSH_KEY_PATH" ]; then
+            key_path="$(_default_private_key)"
+            if [ -z "$key_path" ] || [ ! -f "$key_path" ]; then
                 echo -e "${RED}Error: SSH private key not found!${NC}"
                 echo -e "${YELLOW}Run 'conn key create' to generate a new key pair.${NC}"
                 return 1
             fi
-            
+
+            echo -e "${RED}⚠  WARNING: You are about to display your PRIVATE key.${NC}"
+            echo -e "${RED}   Never share it. Prefer 'conn key public' instead.${NC}"
+            echo ""
+            read -p "Type YES to continue: " confirm
+            if [ "$confirm" != "YES" ]; then
+                echo -e "${YELLOW}Operation cancelled.${NC}"
+                return 0
+            fi
+
             echo -e "${BLUE}=== SSH Private Key ===${NC}"
             echo ""
-            echo -e "${YELLOW}Warning: Keep this key secret!${NC}"
+            cat "$key_path"
             echo ""
-            cat "$SSH_KEY_PATH"
-            echo ""
-            echo -e "${YELLOW}Path:${NC} $SSH_KEY_PATH"
+            echo -e "${YELLOW}Path:${NC} $key_path"
             echo ""
             ;;
-            
+
         create)
-            if [ -f "$SSH_KEY_PATH" ]; then
-                echo -e "${YELLOW}SSH key already exists at: $SSH_KEY_PATH${NC}"
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --rsa)
+                        key_type="rsa"
+                        shift
+                        ;;
+                    --ed25519)
+                        key_type="ed25519"
+                        shift
+                        ;;
+                    *)
+                        echo -e "${RED}Error: unknown option '$1'${NC}"
+                        echo "Usage: conn key create [--rsa]"
+                        return 1
+                        ;;
+                esac
+            done
+
+            if [ "$key_type" = "rsa" ]; then
+                new_key="$HOME/.ssh/id_rsa"
+            else
+                new_key="$HOME/.ssh/id_ed25519"
+            fi
+
+            if [ -f "$new_key" ]; then
+                echo -e "${YELLOW}SSH key already exists at: $new_key${NC}"
                 echo ""
                 read -p "Do you want to overwrite it? (y/N): " confirm
-                
                 if [[ ! "$confirm" =~ ^[yY]$ ]]; then
                     echo -e "${YELLOW}Operation cancelled.${NC}"
-                    echo ""
-                    echo -e "${BLUE}Showing existing public key:${NC}"
-                    echo ""
-                    cat "$SSH_PUB_KEY_PATH"
-                    echo ""
+                    if [ -f "${new_key}.pub" ]; then
+                        echo ""
+                        echo -e "${BLUE}Showing existing public key:${NC}"
+                        echo ""
+                        cat "${new_key}.pub"
+                        echo ""
+                    fi
                     return 0
                 fi
             fi
-            
-            echo -e "${BLUE}=== Creating SSH Key Pair ===${NC}"
+
+            echo -e "${BLUE}=== Creating ${key_type} SSH Key Pair ===${NC}"
             echo ""
-            
-            # Create .ssh directory if it doesn't exist
             mkdir -p "$HOME/.ssh"
             chmod 700 "$HOME/.ssh"
-            
-            # Generate SSH key
-            ssh-keygen -t rsa -b 4096 -f "$SSH_KEY_PATH" -N ""
-            
-            if [ $? -eq 0 ]; then
-                echo ""
-                echo -e "${GREEN}✓ SSH key pair created successfully!${NC}"
-                echo ""
-                echo -e "${BLUE}Your public key:${NC}"
-                echo ""
-                cat "$SSH_PUB_KEY_PATH"
-                echo ""
-                echo -e "${YELLOW}Path:${NC} $SSH_KEY_PATH"
-                echo ""
+
+            comment="$(whoami)@$(hostname -s 2>/dev/null || hostname)"
+
+            # Let ssh-keygen prompt for passphrase (do not force empty)
+            if [ "$key_type" = "rsa" ]; then
+                if ! ssh-keygen -t rsa -b 4096 -f "$new_key" -C "$comment"; then
+                    echo -e "${RED}Error: failed to create SSH key pair!${NC}"
+                    return 1
+                fi
             else
-                echo -e "${RED}Error: failed to create SSH key pair!${NC}"
-                return 1
+                if ! ssh-keygen -t ed25519 -f "$new_key" -C "$comment"; then
+                    echo -e "${RED}Error: failed to create SSH key pair!${NC}"
+                    return 1
+                fi
             fi
+
+            echo ""
+            echo -e "${GREEN}✓ SSH key pair created successfully!${NC}"
+            echo ""
+            echo -e "${BLUE}Your public key:${NC}"
+            echo ""
+            cat "${new_key}.pub"
+            echo ""
+            echo -e "${YELLOW}Path:${NC} $new_key"
+            echo ""
             ;;
-            
+
         *)
             echo -e "${RED}Error: unknown action '$action'${NC}"
-            echo "Usage: conn key <public|private|create>"
+            echo "Usage: conn key <public|private|create [--rsa]>"
             return 1
             ;;
     esac
 }
 
-# Function to check for updates
 check_for_updates() {
-    REPO_URL="https://raw.githubusercontent.com/andreapollastri/conn.web.ap.it/main/src/conn"
-    
-    # Create temporary file
-    TMP_FILE=$(mktemp)
-    
-    # Download the remote version silently
-    if command -v curl &> /dev/null; then
-        curl -fsSL "$REPO_URL" -o "$TMP_FILE" 2>/dev/null
-    elif command -v wget &> /dev/null; then
-        wget -q "$REPO_URL" -O "$TMP_FILE" 2>/dev/null
-    else
-        rm -f "$TMP_FILE"
-        return 0
-    fi
-    
-    # Check if download was successful
-    if [ $? -ne 0 ] || [ ! -s "$TMP_FILE" ]; then
-        rm -f "$TMP_FILE"
-        return 0
-    fi
-    
-    # Find the script path - use a more reliable method
-    if command -v realpath &> /dev/null; then
-        SCRIPT_PATH="$(realpath "$0" 2>/dev/null)"
-    elif command -v readlink &> /dev/null && readlink -f "$0" &> /dev/null 2>&1; then
-        SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null)"
-    elif command -v greadlink &> /dev/null; then
-        SCRIPT_PATH="$(greadlink -f "$0" 2>/dev/null)"
-    else
-        # Fallback - simpler method that doesn't cd
-        if [ -L "$0" ]; then
-            # It's a symlink, try to resolve it
-            SCRIPT_PATH="$(ls -l "$0" 2>/dev/null | awk '{print $NF}')"
-        else
-            SCRIPT_PATH="$0"
+    # Throttle network checks (default: once per 24h)
+    local now last=0
+    now=$(date +%s 2>/dev/null) || return 0
+    mkdir -p "$(dirname "$UPDATE_CACHE_FILE")" 2>/dev/null || true
+    if [ -f "$UPDATE_CACHE_FILE" ]; then
+        last=$(cat "$UPDATE_CACHE_FILE" 2>/dev/null) || last=0
+        case "$last" in
+            ''|*[!0-9]*) last=0 ;;
+        esac
+        if [ $((now - last)) -lt "$UPDATE_CACHE_TTL" ]; then
+            return 0
         fi
     fi
-    
-    # If we couldn't get a path, skip the check
-    if [ -z "$SCRIPT_PATH" ] || [ ! -f "$SCRIPT_PATH" ]; then
-        rm -f "$TMP_FILE"
+    printf '%s\n' "$now" > "$UPDATE_CACHE_FILE" 2>/dev/null || true
+
+    local tmp_file script_path
+    tmp_file=$(mktemp) || return 0
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --connect-timeout 3 --max-time 8 "$REPO_URL" -o "$tmp_file" 2>/dev/null || {
+            rm -f "$tmp_file"
+            return 0
+        }
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -T 8 -O "$tmp_file" "$REPO_URL" 2>/dev/null || {
+            rm -f "$tmp_file"
+            return 0
+        }
+    else
+        rm -f "$tmp_file"
         return 0
     fi
-    
-    # Compare files
-    if ! cmp -s "$SCRIPT_PATH" "$TMP_FILE" 2>/dev/null; then
+
+    if [ ! -s "$tmp_file" ]; then
+        rm -f "$tmp_file"
+        return 0
+    fi
+
+    if ! script_path="$(_resolve_script_path)"; then
+        rm -f "$tmp_file"
+        return 0
+    fi
+
+    if ! cmp -s "$script_path" "$tmp_file" 2>/dev/null; then
         echo ""
         echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         echo -e "${YELLOW}⚠  A new version of the script is available!${NC}"
@@ -702,150 +1366,121 @@ check_for_updates() {
         echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         echo ""
     fi
-    
-    rm -f "$TMP_FILE"
+
+    rm -f "$tmp_file"
 }
 
-# Function to update the script
 update_script() {
     echo -e "${BLUE}=== Update SSH Connection Manager ===${NC}"
     echo ""
-    
-    # GitHub repository URL
-    REPO_URL="https://raw.githubusercontent.com/andreapollastri/conn.web.ap.it/main/src/conn"
-    
-    # Find the script path - use a more reliable method
-    if command -v realpath &> /dev/null; then
-        SCRIPT_PATH="$(realpath "$0")"
-    elif command -v readlink &> /dev/null && readlink -f "$0" &> /dev/null; then
-        SCRIPT_PATH="$(readlink -f "$0")"
-    elif command -v greadlink &> /dev/null; then
-        SCRIPT_PATH="$(greadlink -f "$0")"
-    else
-        # Fallback for macOS
-        SCRIPT_PATH="$( cd "$( dirname "$0" )" && pwd )/$(basename "$0")"
-        # If it's a symlink, resolve it
-        if [ -L "$0" ]; then
-            SCRIPT_PATH="$(ls -l "$0" | awk '{print $NF}')"
-            if [[ "$SCRIPT_PATH" != /* ]]; then
-                SCRIPT_PATH="$( cd "$( dirname "$0" )" && pwd )/$SCRIPT_PATH"
-            fi
-        fi
+
+    local script_path
+    if ! script_path="$(_resolve_script_path)"; then
+        echo -e "${RED}Error: could not resolve script path!${NC}"
+        return 1
     fi
-    
-    echo -e "Current script: ${YELLOW}$SCRIPT_PATH${NC}"
+
+    echo -e "Current script: ${YELLOW}$script_path${NC}"
     echo ""
-    
-    # Check if we need sudo
-    NEED_SUDO=false
-    SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
-    
-    if [ ! -w "$SCRIPT_PATH" ] || [ ! -w "$SCRIPT_DIR" ]; then
-        NEED_SUDO=true
+
+    local need_sudo=false
+    local script_dir
+    script_dir="$(dirname "$script_path")"
+    if [ ! -w "$script_path" ] || [ ! -w "$script_dir" ]; then
+        need_sudo=true
         echo -e "${YELLOW}Note: This script is in a system directory and requires sudo.${NC}"
         echo ""
     fi
-    
-    # Create temporary file
-    TMP_FILE=$(mktemp)
-    
+
+    local tmp_file
+    tmp_file=$(mktemp) || return 1
+
     echo "Downloading latest version from GitHub..."
-    
-    # Download the new version
-    if command -v curl &> /dev/null; then
-        curl -fsSL "$REPO_URL" -o "$TMP_FILE"
-    elif command -v wget &> /dev/null; then
-        wget -q "$REPO_URL" -O "$TMP_FILE"
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$REPO_URL" -o "$tmp_file"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q "$REPO_URL" -O "$tmp_file"
     else
         echo -e "${RED}Error: neither curl nor wget is available!${NC}"
-        rm -f "$TMP_FILE"
+        rm -f "$tmp_file"
         return 1
     fi
-    
-    # Check if download was successful
-    if [ $? -ne 0 ] || [ ! -s "$TMP_FILE" ]; then
+
+    if [ ! -s "$tmp_file" ]; then
         echo -e "${RED}Error: failed to download the update!${NC}"
-        rm -f "$TMP_FILE"
+        rm -f "$tmp_file"
         return 1
     fi
-    
-    # Check if there are actually changes
-    if cmp -s "$SCRIPT_PATH" "$TMP_FILE"; then
+
+    if cmp -s "$script_path" "$tmp_file"; then
         echo ""
         echo -e "${GREEN}✓ Already up to date!${NC}"
-        rm -f "$TMP_FILE"
+        rm -f "$tmp_file"
+        # Refresh cache timestamp
+        mkdir -p "$(dirname "$UPDATE_CACHE_FILE")" 2>/dev/null || true
+        date +%s > "$UPDATE_CACHE_FILE" 2>/dev/null || true
         return 0
     fi
-    
+
     echo -e "${GREEN}✓ New version downloaded${NC}"
     echo ""
-    
-    # Perform update
-    if [ "$NEED_SUDO" = true ]; then
+
+    if [ "$need_sudo" = true ]; then
         echo "Installing update (requires sudo)..."
-        
-        # Backup current version
-        if ! sudo cp "$SCRIPT_PATH" "${SCRIPT_PATH}.backup" 2>/dev/null; then
+        if ! sudo cp "$script_path" "${script_path}.backup" 2>/dev/null; then
             echo -e "${RED}Error: failed to create backup!${NC}"
-            rm -f "$TMP_FILE"
+            rm -f "$tmp_file"
             return 1
         fi
-        
-        # Replace with new version
-        if ! sudo cp "$TMP_FILE" "$SCRIPT_PATH" 2>/dev/null; then
+        if ! sudo cp "$tmp_file" "$script_path" 2>/dev/null; then
             echo -e "${RED}Error: failed to update script!${NC}"
-            rm -f "$TMP_FILE"
+            rm -f "$tmp_file"
             return 1
         fi
-        
-        # Set permissions
-        sudo chmod +x "$SCRIPT_PATH"
+        sudo chmod +x "$script_path"
     else
-        # No sudo needed
-        # Backup current version
-        if ! cp "$SCRIPT_PATH" "${SCRIPT_PATH}.backup" 2>/dev/null; then
+        if ! cp "$script_path" "${script_path}.backup" 2>/dev/null; then
             echo -e "${YELLOW}Warning: could not create backup${NC}"
         fi
-        
-        # Replace with new version
-        cp "$TMP_FILE" "$SCRIPT_PATH"
-        chmod +x "$SCRIPT_PATH"
+        cp "$tmp_file" "$script_path"
+        chmod +x "$script_path"
     fi
-    
-    # Cleanup
-    rm -f "$TMP_FILE"
-    
+
+    rm -f "$tmp_file"
+    mkdir -p "$(dirname "$UPDATE_CACHE_FILE")" 2>/dev/null || true
+    date +%s > "$UPDATE_CACHE_FILE" 2>/dev/null || true
+
     echo ""
     echo -e "${GREEN}✓ Script updated successfully!${NC}"
-    if [ -f "${SCRIPT_PATH}.backup" ]; then
+    if [ -f "${script_path}.backup" ]; then
         echo -e "${YELLOW}Note: A backup of the previous version was saved to:${NC}"
-        echo "  ${SCRIPT_PATH}.backup"
+        echo "  ${script_path}.backup"
     fi
     echo ""
 }
 
-# Main script
 main() {
     if [ $# -eq 0 ]; then
         show_help
         return
     fi
-    
-    command="$1"
+
+    local cmd="$1"
     shift
-    
-    case "$command" in
+
+    case "$cmd" in
         to)
             connect_to "$@"
             ;;
         list)
-            list_connections
+            list_connections "$@"
             ;;
         info)
             show_connection_info "$@"
             ;;
         add)
-            add_connection
+            add_connection "$@"
             ;;
         edit)
             edit_connection "$@"
@@ -862,11 +1497,14 @@ main() {
         update)
             update_script
             ;;
+        completion)
+            print_completion "$@"
+            ;;
         help|--help|-h)
             show_help
             ;;
         *)
-            echo -e "${RED}Error: unknown command '$command'${NC}"
+            echo -e "${RED}Error: unknown command '$cmd'${NC}"
             echo ""
             show_help
             return 1
@@ -874,5 +1512,4 @@ main() {
     esac
 }
 
-# Execute main
 main "$@"
