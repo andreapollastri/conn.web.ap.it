@@ -11,7 +11,7 @@ UPDATE_CACHE_FILE="${CONN_UPDATE_CACHE:-$HOME/.cache/conn/last_update_check}"
 UPDATE_CACHE_TTL="${CONN_UPDATE_TTL:-86400}"
 SECRET_SERVICE="conn.web.ap.it"
 REPO_OWNER="andreapollastri"
-REPO_NAME="conn.web.ap.it"
+REPO_NAME="conn"
 REPO_FILE="src/conn"
 # Fallback only — prefer SHA URL from GitHub API (branch raw CDN can stay stale).
 REPO_URL="https://cdn.jsdelivr.net/gh/${REPO_OWNER}/${REPO_NAME}@main/${REPO_FILE}"

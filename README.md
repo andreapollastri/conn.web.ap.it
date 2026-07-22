@@ -208,7 +208,7 @@ Once you've connected to your servers with **conn**, deploy your Laravel apps wi
 ## Links
 
 - **Website:** [conn.web.ap.it](https://conn.web.ap.it)
-- **Repository:** [github.com/andreapollastri/conn.web.ap.it](https://github.com/andreapollastri/conn.web.ap.it)
+- **Repository:** [github.com/andreapollastri/conn](https://github.com/andreapollastri/conn)
 
 ---
 

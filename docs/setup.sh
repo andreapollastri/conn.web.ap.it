@@ -4,7 +4,7 @@
 # Usage: curl -fsSL https://conn.web.ap.it/setup.sh | bash
 
 REPO_OWNER="andreapollastri"
-REPO_NAME="conn.web.ap.it"
+REPO_NAME="conn"
 REPO_FILE="src/conn"
 RED='\033[0;31m'
 GREEN='\033[0;32m'

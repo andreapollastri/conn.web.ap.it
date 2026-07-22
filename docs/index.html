@@ -638,7 +638,7 @@
       <a href="#docs">Install</a>
       <a href="#commands">Commands</a>
       <a href="#connect">Connect</a>
-      <a class="nav-cta" href="https://github.com/andreapollastri/conn.web.ap.it" target="_blank" rel="noopener">GitHub</a>
+      <a class="nav-cta" href="https://github.com/andreapollastri/conn" target="_blank" rel="noopener">GitHub</a>
     </div>
   </nav>
 
@@ -650,7 +650,7 @@
       <p>A single-file Bash CLI for aliases, keys, ProxyJump, and OS keychain passwords.</p>
       <div class="hero-actions">
         <a class="btn btn-primary" href="#install">Install conn</a>
-        <a class="btn btn-ghost" href="https://github.com/andreapollastri/conn.web.ap.it" target="_blank" rel="noopener">View on GitHub</a>
+        <a class="btn btn-ghost" href="https://github.com/andreapollastri/conn" target="_blank" rel="noopener">View on GitHub</a>
       </div>
     </div>
     <div class="hero-terminal" aria-hidden="true">
@@ -694,8 +694,8 @@
         <h3>From source</h3>
         <div class="code-block">
           <button class="copy" type="button" data-copy>Copy</button>
-          <pre>git clone https://github.com/andreapollastri/conn.web.ap.it.git
-cd conn.web.ap.it
+          <pre>git clone https://github.com/andreapollastri/conn.git
+cd conn
 ./src/install.sh</pre>
         </div>
       </section>
@@ -863,7 +863,7 @@ conn key private         # requires typing YES</pre>
         <p>When <code>conn</code> is installed in <code>/usr/local/bin</code>, the command asks for <code>sudo</code>. It resolves the latest commit SHA through the GitHub API rather than relying on a potentially stale branch CDN URL.</p>
         <p>Every update is downloaded to a temporary file, checked with <code>bash -n</code>, installed with mode <code>755</code>, and re-checked before it replaces the current command. The previous copy is retained as <code>/usr/local/bin/conn.backup</code>; if validation fails, it is restored automatically.</p>
         <div class="note">
-          <strong>Recovery:</strong> if a local installation is damaged, install the repository copy explicitly: <code>sudo install -m 755 ~/Documents/GitHub/conn.web.ap.it/src/conn /usr/local/bin/conn</code>.
+          <strong>Recovery:</strong> if a local installation is damaged, install the repository copy explicitly: <code>sudo install -m 755 ~/Documents/GitHub/conn/src/conn /usr/local/bin/conn</code>.
         </div>
       </section>
 
@@ -946,7 +946,7 @@ rm -f ~/.ssh_connections.conf ~/.ssh_connections.secrets</pre>
   </div>
 
   <footer>
-    <p>Open source · MIT · <a href="https://github.com/andreapollastri/conn.web.ap.it" target="_blank" rel="noopener">GitHub</a></p>
+    <p>Open source · MIT · <a href="https://github.com/andreapollastri/conn" target="_blank" rel="noopener">GitHub</a></p>
     <p>Made by <a href="https://web.ap.it" target="_blank" rel="noopener">Andrea Pollastri</a></p>
   </footer>
 
