@@ -1530,26 +1530,34 @@ update_script() {
     if [ "$need_sudo" = true ]; then
         echo "Installing update (requires sudo)..."
         # Atomic replace: write to .new then mv over the target
-        if sudo cp "$script_path" "${script_path}.backup" &&
-            sudo cp "$tmp_file" "$staging" &&
-            sudo chmod +x "$staging" &&
-            sudo mv -f "$staging" "$script_path"; then
-            install_ok=true
-        else
-            sudo rm -f "$staging" 2>/dev/null || true
+        if sudo cp "$script_path" "${script_path}.backup"; then
+            if sudo cp "$tmp_file" "$staging"; then
+                if sudo chmod +x "$staging"; then
+                    if sudo mv -f "$staging" "$script_path"; then
+                        install_ok=true
+                    fi
+                fi
+            fi
         fi
     else
-        cp "$script_path" "${script_path}.backup" 2>/dev/null || true
-        if cp "$tmp_file" "$staging" &&
-            chmod +x "$staging" &&
-            mv -f "$staging" "$script_path"; then
-            install_ok=true
-        else
-            rm -f "$staging" 2>/dev/null || true
+        if ! cp "$script_path" "${script_path}.backup" 2>/dev/null; then
+            echo -e "${YELLOW}Warning: could not create backup.${NC}"
+        fi
+        if cp "$tmp_file" "$staging"; then
+            if chmod +x "$staging"; then
+                if mv -f "$staging" "$script_path"; then
+                    install_ok=true
+                fi
+            fi
         fi
     fi
 
     if [ "$install_ok" != true ]; then
+        if [ "$need_sudo" = true ]; then
+            sudo rm -f "$staging" 2>/dev/null
+        else
+            rm -f "$staging" 2>/dev/null
+        fi
         echo -e "${RED}Error: failed to install update!${NC}"
         rm -f "$tmp_file"
         return 1
