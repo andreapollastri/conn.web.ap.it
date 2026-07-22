@@ -1532,7 +1532,9 @@ update_script() {
         # Atomic replace: write to .new then mv over the target
         if sudo cp "$script_path" "${script_path}.backup"; then
             if sudo cp "$tmp_file" "$staging"; then
-                if sudo chmod +x "$staging"; then
+                # mktemp creates mode 600; the installed command must also be
+                # readable so later cmp/bash -n checks work for this user.
+                if sudo chmod 755 "$staging"; then
                     if sudo mv -f "$staging" "$script_path"; then
                         install_ok=true
                     fi
@@ -1544,7 +1546,7 @@ update_script() {
             echo -e "${YELLOW}Warning: could not create backup.${NC}"
         fi
         if cp "$tmp_file" "$staging"; then
-            if chmod +x "$staging"; then
+            if chmod 755 "$staging"; then
                 if mv -f "$staging" "$script_path"; then
                     install_ok=true
                 fi
@@ -1564,15 +1566,22 @@ update_script() {
     fi
 
     # Verify the installed file; roll back if somehow invalid
-    if ! bash -n "$script_path" 2>/dev/null; then
+    if [ "$need_sudo" = true ]; then
+        sudo chmod 755 "$script_path" &&
+            sudo bash -n "$script_path" 2>/dev/null
+    else
+        chmod 755 "$script_path" &&
+            bash -n "$script_path" 2>/dev/null
+    fi
+    if [ $? -ne 0 ]; then
         echo -e "${RED}Error: installed file failed syntax check — restoring backup.${NC}"
         if [ -f "${script_path}.backup" ]; then
             if [ "$need_sudo" = true ]; then
                 sudo cp "${script_path}.backup" "$script_path"
-                sudo chmod +x "$script_path"
+                sudo chmod 755 "$script_path"
             else
                 cp "${script_path}.backup" "$script_path"
-                chmod +x "$script_path"
+                chmod 755 "$script_path"
             fi
         fi
         rm -f "$tmp_file"
