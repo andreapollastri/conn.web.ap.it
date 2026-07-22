@@ -558,7 +558,8 @@ show_help() {
     echo "  reset <alias>           - Remove SSH host key for the specified alias"
     echo "  key <action>            - Manage SSH keys (public|private|create [--rsa])"
     echo "  update                  - Update the script to the latest version from GitHub"
-    echo "  completion [bash|zsh]  - Print shell completion script"
+    echo "  completion [bash|zsh]  - Install shell completion"
+    echo "  completion <shell> --print - Print completion script"
     echo "  help                    - Show this help message"
     echo ""
     echo "One-shot add options:"
@@ -660,6 +661,70 @@ EOF
             return 1
             ;;
     esac
+}
+
+install_completion() {
+    local shell="${1:-}"
+    local rc_file line marker
+
+    if [ -z "$shell" ]; then
+        if [ -n "$ZSH_VERSION" ]; then
+            shell="zsh"
+        elif [ -n "$BASH_VERSION" ]; then
+            shell="bash"
+        else
+            echo -e "${RED}Error: specify a shell (bash or zsh).${NC}" >&2
+            return 1
+        fi
+    fi
+
+    case "$shell" in
+        bash)
+            rc_file="$HOME/.bashrc"
+            ;;
+        zsh)
+            rc_file="$HOME/.zshrc"
+            ;;
+        *)
+            echo -e "${RED}Error: unsupported shell '$shell' (use bash or zsh)${NC}" >&2
+            return 1
+            ;;
+    esac
+
+    marker="# conn shell completion"
+    line="eval \"\$(conn completion $shell --print)\""
+
+    if [ -f "$rc_file" ] && grep -Fqx "$marker" "$rc_file"; then
+        echo -e "${GREEN}✓ $shell completion is already installed in $rc_file.${NC}"
+    else
+        {
+            echo ""
+            echo "$marker"
+            echo "$line"
+        } >> "$rc_file" || {
+            echo -e "${RED}Error: could not update $rc_file.${NC}" >&2
+            return 1
+        }
+        echo -e "${GREEN}✓ $shell completion installed in $rc_file.${NC}"
+    fi
+
+    echo "Open a new terminal, or run:"
+    echo "  source $rc_file"
+}
+
+completion_command() {
+    local shell="${1:-}"
+    local mode="${2:-}"
+
+    if [ "$mode" = "--print" ]; then
+        print_completion "$shell"
+    elif [ -n "$mode" ]; then
+        echo -e "${RED}Error: unknown completion option '$mode'.${NC}" >&2
+        echo "Usage: conn completion [bash|zsh] [--print]"
+        return 1
+    else
+        install_completion "$shell"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -1635,7 +1700,7 @@ main() {
             update_script
             ;;
         completion)
-            print_completion "$@"
+            completion_command "$@"
             ;;
         help|--help|-h)
             show_help

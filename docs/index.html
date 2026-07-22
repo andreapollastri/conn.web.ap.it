@@ -676,6 +676,7 @@
       <a href="#add">Add servers</a>
       <a href="#connect">Connect</a>
       <a href="#keys">SSH keys</a>
+      <a href="#updates">Self-update</a>
       <a href="#config">Configuration</a>
       <a href="#secrets">Passwords &amp; secrets</a>
       <a href="#completion">Shell completion</a>
@@ -767,11 +768,15 @@ conn to production</pre>
               </tr>
               <tr>
                 <td><code>conn update</code></td>
-                <td>Self-update from GitHub</td>
+                <td>Safely update from the latest GitHub commit</td>
               </tr>
               <tr>
                 <td><code>conn completion [bash|zsh]</code></td>
-                <td>Print shell completion script</td>
+                <td>Install idempotent shell completion</td>
+              </tr>
+              <tr>
+                <td><code>conn completion &lt;shell&gt; --print</code></td>
+                <td>Print the raw completion script instead of installing it</td>
               </tr>
               <tr>
                 <td><code>conn help</code></td>
@@ -849,6 +854,20 @@ conn key private         # requires typing YES</pre>
         </div>
       </section>
 
+      <section id="updates">
+        <h2>Self-update</h2>
+        <p class="lead">Update from GitHub without manually replacing the command.</p>
+        <div class="code-block">
+          <button class="copy" type="button" data-copy>Copy</button>
+          <pre>conn update</pre>
+        </div>
+        <p>When <code>conn</code> is installed in <code>/usr/local/bin</code>, the command asks for <code>sudo</code>. It resolves the latest commit SHA through the GitHub API rather than relying on a potentially stale branch CDN URL.</p>
+        <p>Every update is downloaded to a temporary file, checked with <code>bash -n</code>, installed with mode <code>755</code>, and re-checked before it replaces the current command. The previous copy is retained as <code>/usr/local/bin/conn.backup</code>; if validation fails, it is restored automatically.</p>
+        <div class="note">
+          <strong>Recovery:</strong> if a local installation is damaged, install the repository copy explicitly: <code>sudo install -m 755 ~/Documents/GitHub/conn.web.ap.it/src/conn /usr/local/bin/conn</code>.
+        </div>
+      </section>
+
       <section id="config">
         <h2>Configuration</h2>
         <p class="lead">Connections live in a plain file you can back up or sync — without secrets inline.</p>
@@ -894,11 +913,12 @@ staging|deploy|staging.example.com|2222||||</pre>
         <div class="code-block">
           <button class="copy" type="button" data-copy>Copy</button>
           <pre># bash
-echo 'eval "$(conn completion bash)"' >> ~/.bashrc
+conn completion bash
 
 # zsh
-echo 'eval "$(conn completion zsh)"' >> ~/.zshrc</pre>
+conn completion zsh</pre>
         </div>
+        <p>The command adds the loader to <code>~/.bashrc</code> or <code>~/.zshrc</code> only once. Open a new terminal or run the printed <code>source</code> command. Use <code>conn completion zsh --print</code> when you need the raw script.</p>
       </section>
 
       <section id="uninstall">

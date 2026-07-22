@@ -35,11 +35,13 @@ Downloads and installs `conn` to `/usr/local/bin`
 
 ```bash
 # bash
-echo 'eval "$(conn completion bash)"' >> ~/.bashrc
+conn completion bash
 
 # zsh
-echo 'eval "$(conn completion zsh)"' >> ~/.zshrc
+conn completion zsh
 ```
+
+The command adds an idempotent loader to the shell configuration file. Open a new terminal or run the `source` command it prints. Use `conn completion zsh --print` (or `bash --print`) only when you need the raw completion script.
 
 ---
 
@@ -57,7 +59,7 @@ echo 'eval "$(conn completion zsh)"' >> ~/.zshrc
 | `conn reset <alias>`           | Remove stale host keys (`ssh-keygen -R`)                 |
 | `conn key <action>`            | Manage SSH keys — `public`, `private`, `create [--rsa]`  |
 | `conn update`                  | Self-update from GitHub                                  |
-| `conn completion [bash\|zsh]`  | Print shell completion script                            |
+| `conn completion [bash\|zsh]`  | Install idempotent shell completion                      |
 | `conn help`                    | Print usage reference                                    |
 
 ---
