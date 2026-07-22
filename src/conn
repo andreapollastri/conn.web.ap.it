@@ -1413,15 +1413,18 @@ update_script() {
         echo ""
     fi
 
-    local tmp_file
+    local tmp_file staging
     tmp_file=$(mktemp) || return 1
+    staging="${script_path}.new"
+    # Cache-bust raw.githubusercontent.com (CDN can briefly serve stale/partial bodies)
+    local download_url="${REPO_URL}?t=$(date +%s)"
 
     echo "Downloading latest version from GitHub..."
 
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$REPO_URL" -o "$tmp_file"
+        curl -fsSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$download_url" -o "$tmp_file"
     elif command -v wget >/dev/null 2>&1; then
-        wget -q "$REPO_URL" -O "$tmp_file"
+        wget -q --no-cache -O "$tmp_file" "$download_url"
     else
         echo -e "${RED}Error: neither curl nor wget is available!${NC}"
         rm -f "$tmp_file"
@@ -1435,13 +1438,18 @@ update_script() {
     fi
 
     # Refuse to install a truncated / invalid script
-    if ! bash -n "$tmp_file" 2>/dev/null; then
-        echo -e "${RED}Error: downloaded file failed syntax check — update aborted.${NC}"
+    if ! head -n1 "$tmp_file" | grep -q '^#!'; then
+        echo -e "${RED}Error: downloaded file does not look like a shell script — update aborted.${NC}"
         rm -f "$tmp_file"
         return 1
     fi
-    if ! head -n1 "$tmp_file" | grep -q '^#!'; then
-        echo -e "${RED}Error: downloaded file does not look like a shell script — update aborted.${NC}"
+    if ! grep -q '^main "$@"' "$tmp_file"; then
+        echo -e "${RED}Error: downloaded file looks incomplete — update aborted.${NC}"
+        rm -f "$tmp_file"
+        return 1
+    fi
+    if ! bash -n "$tmp_file" 2>/dev/null; then
+        echo -e "${RED}Error: downloaded file failed syntax check — update aborted.${NC}"
         rm -f "$tmp_file"
         return 1
     fi
@@ -1450,7 +1458,6 @@ update_script() {
         echo ""
         echo -e "${GREEN}✓ Already up to date!${NC}"
         rm -f "$tmp_file"
-        # Refresh cache timestamp
         mkdir -p "$(dirname "$UPDATE_CACHE_FILE")" 2>/dev/null || true
         date +%s > "$UPDATE_CACHE_FILE" 2>/dev/null || true
         return 0
@@ -1459,25 +1466,49 @@ update_script() {
     echo -e "${GREEN}✓ New version downloaded${NC}"
     echo ""
 
+    local install_ok=false
     if [ "$need_sudo" = true ]; then
         echo "Installing update (requires sudo)..."
-        if ! sudo cp "$script_path" "${script_path}.backup" 2>/dev/null; then
-            echo -e "${RED}Error: failed to create backup!${NC}"
-            rm -f "$tmp_file"
-            return 1
+        # Atomic replace: write to .new then mv over the target
+        if sudo cp "$script_path" "${script_path}.backup" &&
+            sudo cp "$tmp_file" "$staging" &&
+            sudo chmod +x "$staging" &&
+            sudo mv -f "$staging" "$script_path"; then
+            install_ok=true
+        else
+            sudo rm -f "$staging" 2>/dev/null || true
         fi
-        if ! sudo cp "$tmp_file" "$script_path" 2>/dev/null; then
-            echo -e "${RED}Error: failed to update script!${NC}"
-            rm -f "$tmp_file"
-            return 1
-        fi
-        sudo chmod +x "$script_path"
     else
-        if ! cp "$script_path" "${script_path}.backup" 2>/dev/null; then
-            echo -e "${YELLOW}Warning: could not create backup${NC}"
+        cp "$script_path" "${script_path}.backup" 2>/dev/null || true
+        if cp "$tmp_file" "$staging" &&
+            chmod +x "$staging" &&
+            mv -f "$staging" "$script_path"; then
+            install_ok=true
+        else
+            rm -f "$staging" 2>/dev/null || true
         fi
-        cp "$tmp_file" "$script_path"
-        chmod +x "$script_path"
+    fi
+
+    if [ "$install_ok" != true ]; then
+        echo -e "${RED}Error: failed to install update!${NC}"
+        rm -f "$tmp_file"
+        return 1
+    fi
+
+    # Verify the installed file; roll back if somehow invalid
+    if ! bash -n "$script_path" 2>/dev/null; then
+        echo -e "${RED}Error: installed file failed syntax check — restoring backup.${NC}"
+        if [ -f "${script_path}.backup" ]; then
+            if [ "$need_sudo" = true ]; then
+                sudo cp "${script_path}.backup" "$script_path"
+                sudo chmod +x "$script_path"
+            else
+                cp "${script_path}.backup" "$script_path"
+                chmod +x "$script_path"
+            fi
+        fi
+        rm -f "$tmp_file"
+        return 1
     fi
 
     rm -f "$tmp_file"
