@@ -905,6 +905,12 @@ staging|deploy|staging.example.com|2222||||</pre>
         <div class="note">
           Prefer SSH key authentication whenever possible. Stored passwords are a convenience layer, not a replacement for keys.
         </div>
+        <h3>Platform support</h3>
+        <ul>
+          <li><strong>macOS:</strong> native Keychain storage and <code>pbcopy</code> clipboard support.</li>
+          <li><strong>Linux:</strong> native <code>secret-tool</code> / <code>pass</code> storage and <code>xclip</code>, <code>xsel</code>, or <code>wl-copy</code> clipboard support.</li>
+          <li><strong>Windows:</strong> not supported natively. The script may run through WSL or Git Bash, but it does not integrate with Windows Credential Manager or <code>clip.exe</code>; treat the fallback secret file with extra care.</li>
+        </ul>
       </section>
 
       <section id="completion">

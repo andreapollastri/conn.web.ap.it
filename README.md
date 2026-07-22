@@ -160,6 +160,12 @@ Passwords are **not** stored in this file. They go to, in order of preference:
 3. **pass** (password-store)
 4. Fallback file `~/.ssh_connections.secrets` (`chmod 600`)
 
+### Platform support
+
+- **macOS:** native support for Keychain and `pbcopy`.
+- **Linux:** native support for `secret-tool` / `pass` and `xclip`, `xsel`, or `wl-copy`.
+- **Windows:** not supported natively. `conn` may run in WSL or Git Bash, but it does not currently integrate with Windows Credential Manager or `clip.exe`; the fallback secret file should therefore be treated with extra care.
+
 Existing configs in the old `alias|user|host|port|password|folder` format are migrated automatically on first run — passwords are moved into the secret store and removed from the connections file.
 
 Fields must not contain `|`.
@@ -172,6 +178,7 @@ Fields must not contain `|`.
 - Bash 3.2+ (macOS system Bash is fine)
 - OpenSSH client
 - Clipboard support — `pbcopy` on macOS; `xclip`, `xsel`, or `wl-copy` on Linux
+- Windows is supported only through WSL or Git Bash, with the limitations above
 
 ---
 
