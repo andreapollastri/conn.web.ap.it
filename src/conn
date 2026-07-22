@@ -466,6 +466,34 @@ _repeat_char() {
     printf '%s' "$out"
 }
 
+# Display width of Notes icons. macOS/BSD printf %-Ns pads by bytes, not
+# terminal columns, so emoji break box-drawing tables unless we pad manually.
+_notes_display_width() {
+    local notes="$1"
+    local w=0
+    local t="$notes"
+    while [ -n "$t" ]; do
+        case "$t" in
+            🔑*) w=$((w + 2)); t="${t#🔑}" ;;
+            📂*) w=$((w + 2)); t="${t#📂}" ;;
+            🔐*) w=$((w + 2)); t="${t#🔐}" ;;
+            ↪*)  w=$((w + 1)); t="${t#↪}" ;;
+            *)   w=$((w + 1)); t="${t:1}" ;;
+        esac
+    done
+    printf '%s' "$w"
+}
+
+_pad_notes_cell() {
+    local notes="$1"
+    local width="$2"
+    local dw pad
+    dw=$(_notes_display_width "$notes")
+    pad=$((width - dw))
+    [ "$pad" -lt 0 ] && pad=0
+    printf '%s%*s' "$notes" "$pad" ''
+}
+
 # ---------------------------------------------------------------------------
 # Help / completion
 # ---------------------------------------------------------------------------
@@ -660,12 +688,15 @@ list_connections() {
     mid="├$(_repeat_char 5 '─')┼$(_repeat_char "$W_ALIAS" '─')┼$(_repeat_char "$W_USER" '─')┼$(_repeat_char "$W_HOST" '─')┼$(_repeat_char "$W_PORT" '─')┼$(_repeat_char "$W_FOLDER" '─')┼$(_repeat_char "$W_NOTES" '─')┤"
     bot="└$(_repeat_char 5 '─')┴$(_repeat_char "$W_ALIAS" '─')┴$(_repeat_char "$W_USER" '─')┴$(_repeat_char "$W_HOST" '─')┴$(_repeat_char "$W_PORT" '─')┴$(_repeat_char "$W_FOLDER" '─')┴$(_repeat_char "$W_NOTES" '─')┘"
 
+    local h_notes
+    h_notes=$(_pad_notes_cell "Notes" "$W_NOTES")
+
     echo -e "${BLUE}${top}${NC}"
-    printf "${BLUE}│${NC}%5s${BLUE}│${NC}%-${W_ALIAS}s${BLUE}│${NC}%-${W_USER}s${BLUE}│${NC}%-${W_HOST}s${BLUE}│${NC}%-${W_PORT}s${BLUE}│${NC}%-${W_FOLDER}s${BLUE}│${NC}%-${W_NOTES}s${BLUE}│${NC}\n" \
-        "#" "$h_alias" "$h_user" "$h_host" "$h_port" "$h_folder" "Notes"
+    printf "${BLUE}│${NC}%5s${BLUE}│${NC}%-${W_ALIAS}s${BLUE}│${NC}%-${W_USER}s${BLUE}│${NC}%-${W_HOST}s${BLUE}│${NC}%-${W_PORT}s${BLUE}│${NC}%-${W_FOLDER}s${BLUE}│${NC}%s${BLUE}│${NC}\n" \
+        "#" "$h_alias" "$h_user" "$h_host" "$h_port" "$h_folder" "$h_notes"
     echo -e "${BLUE}${mid}${NC}"
 
-    local idx=0 line notes ca cu ch cp cf
+    local idx=0 line notes ca cu ch cp cf cn
     while IFS= read -r line || [ -n "$line" ]; do
         [ -z "$line" ] && continue
         case "$line" in \#*) continue ;; esac
@@ -688,9 +719,10 @@ list_connections() {
         else
             cf=$(_truncate_cell "-" "$W_FOLDER")
         fi
+        cn=$(_pad_notes_cell "$notes" "$W_NOTES")
 
-        printf "${BLUE}│${NC}${GREEN}%5d${NC}${BLUE}│${NC}%-${W_ALIAS}s${BLUE}│${NC}%-${W_USER}s${BLUE}│${NC}%-${W_HOST}s${BLUE}│${NC}%-${W_PORT}s${BLUE}│${NC}%-${W_FOLDER}s${BLUE}│${NC}%-${W_NOTES}s${BLUE}│${NC}\n" \
-            "$idx" "$ca" "$cu" "$ch" "$cp" "$cf" "$notes"
+        printf "${BLUE}│${NC}${GREEN}%5d${NC}${BLUE}│${NC}%-${W_ALIAS}s${BLUE}│${NC}%-${W_USER}s${BLUE}│${NC}%-${W_HOST}s${BLUE}│${NC}%-${W_PORT}s${BLUE}│${NC}%-${W_FOLDER}s${BLUE}│${NC}%s${BLUE}│${NC}\n" \
+            "$idx" "$ca" "$cu" "$ch" "$cp" "$cf" "$cn"
     done < <(sort "$CONFIG_FILE")
 
     echo -e "${BLUE}${bot}${NC}"
