@@ -86,14 +86,29 @@ _validate_port() {
     return 0
 }
 
+# Count pipe separators in a config line
+_pipe_count() {
+    awk -F'|' '{print NF-1}' <<< "$1"
+}
+
+# Expand a leading ~/ to $HOME (portable — avoids ${var/#\~/} quirks)
+_expand_path() {
+    local p="$1"
+    case "$p" in
+        "~") p="$HOME" ;;
+        "~/"*) p="$HOME/${p#~/}" ;;
+    esac
+    printf '%s' "$p"
+}
+
 # Parse a config line into globals: _c_alias _c_user _c_host _c_port _c_folder _c_identity _c_jump
-# Legacy (5 pipes):  alias|user|host|port|password|folder
-# Current (6 pipes): alias|user|host|port|folder|identity|proxyjump
+# Legacy (< 6 pipes): alias|user|host|port|[password]|[folder]
+# Current (6 pipes):  alias|user|host|port|folder|identity|proxyjump
 _parse_line() {
     local line="$1"
     local f1 f2 f3 f4 f5 f6 f7 pipes
     IFS='|' read -r f1 f2 f3 f4 f5 f6 f7 <<< "$line"
-    pipes=$(awk -F'|' '{print NF-1}' <<< "$line")
+    pipes="$(_pipe_count "$line")"
 
     _c_alias="$f1"
     _c_user="$f2"
@@ -109,6 +124,9 @@ _parse_line() {
         _c_identity="$f6"
         _c_jump="$f7"
     else
+        # 3 pipes: alias|user|host|port
+        # 4 pipes: alias|user|host|port|password
+        # 5 pipes: alias|user|host|port|password|folder
         _c_legacy_password="$f5"
         _c_folder="$f6"
     fi
@@ -173,9 +191,9 @@ _migrate_config_if_needed() {
     while IFS= read -r line || [ -n "$line" ]; do
         [ -z "$line" ] && continue
         case "$line" in \#*) continue ;; esac
-        pipes=$(awk -F'|' '{print NF-1}' <<< "$line")
-        # Legacy has 5 pipes (6 fields). New has 6 pipes (7 fields).
-        if [ "$pipes" -eq 5 ]; then
+        pipes="$(_pipe_count "$line")"
+        # Anything with fewer than 6 pipes is legacy (with or without folder).
+        if [ "$pipes" -lt 6 ]; then
             needs_migrate=1
             break
         fi
@@ -183,36 +201,35 @@ _migrate_config_if_needed() {
 
     [ "$needs_migrate" -eq 0 ] && return 0
 
-    local tmp a u h p pw f
+    local tmp a u h p pw f migrated=0
     tmp=$(mktemp) || return 1
 
     while IFS= read -r line || [ -n "$line" ]; do
         [ -z "$line" ] && continue
         case "$line" in \#*) printf '%s\n' "$line" >> "$tmp"; continue ;; esac
 
-        pipes=$(awk -F'|' '{print NF-1}' <<< "$line")
-        if [ "$pipes" -eq 5 ]; then
-            IFS='|' read -r a u h p pw f <<< "$line"
-            if [ -n "$pw" ]; then
-                if _secret_set "$a" "$pw"; then
-                    :
-                else
-                    echo -e "${YELLOW}Warning: could not migrate password for '$a' to secret store; keeping secrets file fallback.${NC}" >&2
-                    _secret_file_set "$a" "$pw"
-                fi
-            fi
-            _format_line "$a" "$u" "$h" "$p" "$f" "" "" >> "$tmp"
-        elif [ "$pipes" -ge 6 ]; then
+        pipes="$(_pipe_count "$line")"
+        if [ "$pipes" -ge 6 ]; then
             printf '%s\n' "$line" >> "$tmp"
-        else
-            # Partial / unknown — keep as-is
-            printf '%s\n' "$line" >> "$tmp"
+            continue
         fi
+
+        IFS='|' read -r a u h p pw f <<< "$line"
+        if [ -n "$pw" ]; then
+            if ! _secret_set "$a" "$pw"; then
+                echo -e "${YELLOW}Warning: could not migrate password for '$a' to secret store; using secrets file fallback.${NC}" >&2
+                _secret_file_set "$a" "$pw"
+            fi
+        fi
+        _format_line "$a" "$u" "$h" "$p" "$f" "" "" >> "$tmp"
+        migrated=1
     done < "$CONFIG_FILE"
 
     mv "$tmp" "$CONFIG_FILE"
     chmod 600 "$CONFIG_FILE"
-    echo -e "${GREEN}✓ Migrated config to secure format (passwords moved out of $CONFIG_FILE).${NC}" >&2
+    if [ "$migrated" -eq 1 ]; then
+        echo -e "${GREEN}✓ Migrated config to secure format (passwords moved out of $CONFIG_FILE).${NC}" >&2
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -600,16 +617,18 @@ list_connections() {
     fi
 
     local W_ALIAS=14 W_USER=8 W_HOST=16 W_PORT=4 W_FOLDER=20 W_NOTES=12
-    local _a _u _h _p _f _i _j
+    local line
 
-    while IFS='|' read -r _a _u _h _p _f _i _j; do
-        [ -z "$_a" ] && continue
-        [ ${#_a} -gt "$W_ALIAS" ] && W_ALIAS=${#_a}
-        [ ${#_u} -gt "$W_USER" ] && W_USER=${#_u}
-        [ ${#_h} -gt "$W_HOST" ] && W_HOST=${#_h}
-        [ ${#_p} -gt "$W_PORT" ] && W_PORT=${#_p}
-        if [ -n "$_f" ]; then
-            [ ${#_f} -gt "$W_FOLDER" ] && W_FOLDER=${#_f}
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -z "$line" ] && continue
+        case "$line" in \#*) continue ;; esac
+        _parse_line "$line"
+        [ ${#_c_alias} -gt "$W_ALIAS" ] && W_ALIAS=${#_c_alias}
+        [ ${#_c_user} -gt "$W_USER" ] && W_USER=${#_c_user}
+        [ ${#_c_host} -gt "$W_HOST" ] && W_HOST=${#_c_host}
+        [ ${#_c_port} -gt "$W_PORT" ] && W_PORT=${#_c_port}
+        if [ -n "$_c_folder" ]; then
+            [ ${#_c_folder} -gt "$W_FOLDER" ] && W_FOLDER=${#_c_folder}
         fi
     done < <(sort "$CONFIG_FILE")
 
@@ -877,7 +896,7 @@ add_connection() {
 
     # Expand ~ in identity
     if [ -n "$identity" ]; then
-        identity="${identity/#\~/$HOME}"
+        identity="$(_expand_path "$identity")"
     fi
 
     if [ -n "$password" ]; then
@@ -988,7 +1007,7 @@ edit_connection() {
         new_identity=""
     fi
     if [ -n "$new_identity" ]; then
-        new_identity="${new_identity/#\~/$HOME}"
+        new_identity="$(_expand_path "$new_identity")"
     fi
 
     if [ -n "$current_jump" ]; then
@@ -1115,14 +1134,16 @@ connect_to() {
     [ -n "$_c_identity" ] && echo -e "  ${YELLOW}🔐 $_c_identity${NC}"
     [ -n "$_c_jump" ] && echo -e "  ${YELLOW}↪ $_c_jump${NC}"
 
-    local password
-    if password=$(_secret_get "$conn_alias" 2>/dev/null); then
-        if [ -n "$password" ]; then
-            if _copy_to_clipboard "$password"; then
-                echo -e "  ${GREEN}✓ Password copied to clipboard!${NC}"
-            else
-                echo -e "  ${YELLOW}⚠  Cannot copy to clipboard (install pbcopy/xclip/xsel/wl-copy)${NC}"
-            fi
+    local password=""
+    password=$(_secret_get "$conn_alias" 2>/dev/null) || true
+    if [ -z "$password" ] && [ -n "${_c_legacy_password:-}" ]; then
+        password="$_c_legacy_password"
+    fi
+    if [ -n "$password" ]; then
+        if _copy_to_clipboard "$password"; then
+            echo -e "  ${GREEN}✓ Password copied to clipboard!${NC}"
+        else
+            echo -e "  ${YELLOW}⚠  Cannot copy to clipboard (install pbcopy/xclip/xsel/wl-copy)${NC}"
         fi
     fi
 
@@ -1409,6 +1430,18 @@ update_script() {
 
     if [ ! -s "$tmp_file" ]; then
         echo -e "${RED}Error: failed to download the update!${NC}"
+        rm -f "$tmp_file"
+        return 1
+    fi
+
+    # Refuse to install a truncated / invalid script
+    if ! bash -n "$tmp_file" 2>/dev/null; then
+        echo -e "${RED}Error: downloaded file failed syntax check — update aborted.${NC}"
+        rm -f "$tmp_file"
+        return 1
+    fi
+    if ! head -n1 "$tmp_file" | grep -q '^#!'; then
+        echo -e "${RED}Error: downloaded file does not look like a shell script — update aborted.${NC}"
         rm -f "$tmp_file"
         return 1
     fi
