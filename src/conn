@@ -1531,13 +1531,11 @@ update_script() {
         echo "Installing update (requires sudo)..."
         # Atomic replace: write to .new then mv over the target
         if sudo cp "$script_path" "${script_path}.backup"; then
-            if sudo cp "$tmp_file" "$staging"; then
-                # mktemp creates mode 600; the installed command must also be
-                # readable so later cmp/bash -n checks work for this user.
-                if sudo chmod 755 "$staging"; then
-                    if sudo mv -f "$staging" "$script_path"; then
-                        install_ok=true
-                    fi
+            # install sets permissions explicitly; cp + chmod can preserve
+            # restrictive temporary-file modes on macOS.
+            if sudo install -m 755 "$tmp_file" "$staging"; then
+                if sudo mv -f "$staging" "$script_path"; then
+                    install_ok=true
                 fi
             fi
         fi
@@ -1545,11 +1543,9 @@ update_script() {
         if ! cp "$script_path" "${script_path}.backup" 2>/dev/null; then
             echo -e "${YELLOW}Warning: could not create backup.${NC}"
         fi
-        if cp "$tmp_file" "$staging"; then
-            if chmod 755 "$staging"; then
-                if mv -f "$staging" "$script_path"; then
-                    install_ok=true
-                fi
+        if install -m 755 "$tmp_file" "$staging"; then
+            if mv -f "$staging" "$script_path"; then
+                install_ok=true
             fi
         fi
     fi
